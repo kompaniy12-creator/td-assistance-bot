@@ -291,6 +291,56 @@ function stopCamera() {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 }
 
+// ── Silhouette geometry & path ────────────────────────────────
+function silGeo(vw, vh) {
+  return {
+    cx: vw / 2,
+    headCy: vh * 0.34,        // center y of head ellipse
+    headW:  vw * 0.27,        // half-width of head
+    headH:  vh * 0.21,        // half-height of head
+    neckW:  vw * 0.10,        // half-width of neck
+    neckBy: vh * 0.60,        // y where neck meets shoulders
+    shW:    vw * 0.46,        // half-width of shoulders
+    shY:    vh * 0.68,        // y of shoulder peak
+    botY:   vh * 1.10         // off-screen bottom
+  };
+}
+
+function silPath(g) {
+  const p = new Path2D();
+  // Head ellipse
+  p.moveTo(g.cx - g.headW, g.headCy);
+  p.ellipse(g.cx, g.headCy, g.headW, g.headH, 0, Math.PI, 0, false);
+  // Right: head bottom → neck → shoulder
+  p.bezierCurveTo(
+    g.cx + g.headW * 0.92, g.headCy + g.headH * 1.25,
+    g.cx + g.neckW * 1.4,  g.headCy + g.headH * 1.55,
+    g.cx + g.neckW,        g.neckBy
+  );
+  p.bezierCurveTo(
+    g.cx + g.neckW * 1.9,  g.neckBy + (g.shY - g.neckBy) * 0.35,
+    g.cx + g.shW * 0.72,   g.shY - (g.shY - g.neckBy) * 0.20,
+    g.cx + g.shW,          g.shY
+  );
+  // Down right + bottom + up left
+  p.lineTo(g.cx + g.shW, g.botY);
+  p.lineTo(g.cx - g.shW, g.botY);
+  p.lineTo(g.cx - g.shW, g.shY);
+  // Left: shoulder → neck → head
+  p.bezierCurveTo(
+    g.cx - g.shW * 0.72,   g.shY - (g.shY - g.neckBy) * 0.20,
+    g.cx - g.neckW * 1.9,  g.neckBy + (g.shY - g.neckBy) * 0.35,
+    g.cx - g.neckW,        g.neckBy
+  );
+  p.bezierCurveTo(
+    g.cx - g.neckW * 1.4,  g.headCy + g.headH * 1.55,
+    g.cx - g.headW * 0.92, g.headCy + g.headH * 1.25,
+    g.cx - g.headW,        g.headCy
+  );
+  p.closePath();
+  return p;
+}
+
 // ── Detection loop ────────────────────────────────────────────
 function startLoop() {
   const video  = $('video');
@@ -305,16 +355,15 @@ function startLoop() {
     canvas.width = vw; canvas.height = vh;
     ctx.clearRect(0, 0, vw, vh);
 
-    // Oval guide geometry
-    const ow = vw * 0.62, oh = ow * 1.28;
-    const ox = vw / 2,    oy = vh * 0.45;
+    const g = silGeo(vw, vh);
+    const path = silPath(g);
 
-    // Vignette outside oval
+    // Vignette outside silhouette
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.58)';
+    ctx.fillStyle = 'rgba(0,0,0,0.62)';
     ctx.fillRect(0, 0, vw, vh);
     ctx.globalCompositeOperation = 'destination-out';
-    ctx.beginPath(); ctx.ellipse(ox, oy, ow/2, oh/2, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fill(path);
     ctx.restore();
 
     // Face detection
@@ -327,15 +376,16 @@ function startLoop() {
     } catch { /* ignore */ }
     detecting = false;
 
-    // Evaluate position
-    let status = 'none', hint = '👤  Поместите лицо в овал', icon = '👤';
+    // Evaluate position vs head ellipse
+    let status = 'none', hint = '👤  Встаньте в контур', icon = '👤';
 
     if (det) {
       const b  = det.detection.box;
-      const cx = b.x + b.width/2, cy = b.y + b.height/2;
-      const sr = b.height / oh;
-      const ox2 = Math.abs(cx - ox) / (ow/2);
-      const oy2 = Math.abs(cy - oy) / (oh/2);
+      const fcx = b.x + b.width/2, fcy = b.y + b.height/2;
+      // face height vs head ellipse height (face = forehead→chin ≈ 80% of head)
+      const sr  = b.height / (g.headH * 2);
+      const off = Math.abs(fcx - g.cx) / g.headW;
+      const offY = Math.abs(fcy - g.headCy) / g.headH;
 
       const lm   = det.landmarks;
       const avgY = pts => pts.reduce((s,p) => s+p.y,0) / pts.length;
@@ -345,12 +395,12 @@ function startLoop() {
         avgX(lm.getRightEye()) - avgX(lm.getLeftEye())
       ) * 180 / Math.PI);
 
-      if      (sr < 0.52)  { status='far';   hint='🔍  Подойдите ближе';        icon='🔍'; }
-      else if (sr > 0.96)  { status='close'; hint='↔️  Отойдите дальше';         icon='↔️'; }
-      else if (ox2 > 0.32) { status='side';  hint=(cx<ox)?'→  Вправо':'←  Влево'; icon='↔️'; }
-      else if (oy2 > 0.32) { status='vert';  hint=(cy<oy)?'↓  Вниз':'↑  Вверх';  icon='↕️'; }
-      else if (ang > 5)    { status='tilt';  hint='📐  Держите голову ровно';     icon='📐'; }
-      else                 { status='ok';    hint='✅  Хорошо! Держите…';         icon='✅'; }
+      if      (sr < 0.55)  { status='far';   hint='🔍  Подойдите ближе';            icon='🔍'; }
+      else if (sr > 0.95)  { status='close'; hint='↔️  Отойдите дальше';             icon='↔️'; }
+      else if (off  > 0.4) { status='side';  hint=(fcx<g.cx)?'→  Вправо':'←  Влево'; icon='↔️'; }
+      else if (offY > 0.55){ status='vert';  hint=(fcy<g.headCy)?'↓  Вниз':'↑  Вверх'; icon='↕️'; }
+      else if (ang > 5)    { status='tilt';  hint='📐  Держите голову ровно';        icon='📐'; }
+      else                 { status='ok';    hint='✅  Хорошо! Держите…';            icon='✅'; }
     }
 
     // Countdown / auto-capture
@@ -365,16 +415,17 @@ function startLoop() {
     ring.style.strokeDashoffset = RING_C * (1 - goodFrames/NEED_GOOD);
     ring.style.opacity = status === 'ok' ? '1' : '0';
 
-    // Oval border
-    const clr = { none:'rgba(255,255,255,.45)', far:'#f2994a', close:'#f2994a',
+    // Silhouette outline
+    const clr = { none:'rgba(255,255,255,.55)', far:'#f2994a', close:'#f2994a',
                   side:'#f2994a', vert:'#f2994a', tilt:'#f2994a', ok:'#27ae60' }[status];
     ctx.save();
-    ctx.strokeStyle = clr; ctx.lineWidth = 3; ctx.setLineDash([14,7]);
-    ctx.beginPath(); ctx.ellipse(ox, oy, ow/2, oh/2, 0, 0, Math.PI*2); ctx.stroke();
-    [[ox, oy-oh/2],[ox, oy+oh/2],[ox-ow/2, oy],[ox+ow/2, oy]].forEach(([x,y]) => {
-      ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI*2);
-      ctx.fillStyle = clr; ctx.fill();
-    });
+    ctx.strokeStyle = clr;
+    ctx.lineWidth = 3.5;
+    ctx.setLineDash([14, 7]);
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 8;
+    ctx.stroke(path);
     ctx.restore();
 
     $('hintIcon').textContent = icon;
@@ -405,33 +456,74 @@ async function processSnap(snap) {
   const step = n => ids.forEach((id,i) =>
     $(id).className = 'pstep' + (i<n?' done':i===n?' active':''));
 
-  step(0);
-  const imgEl = await c2i(snap);
-  const det = await faceapi
-    .detectSingleFace(imgEl, new faceapi.TinyFaceDetectorOptions({ inputSize:512, scoreThreshold:.3 }))
-    .withFaceLandmarks();
+  try {
+    step(0);
+    // Use canvas directly with face-api (skip dataURL roundtrip)
+    let det = null;
+    try {
+      det = await withTimeout(
+        faceapi
+          .detectSingleFace(snap, new faceapi.TinyFaceDetectorOptions({ inputSize:512, scoreThreshold:.3 }))
+          .withFaceLandmarks(),
+        8000, 'face detection'
+      );
+    } catch (e) {
+      console.error('Face detection failed:', e);
+    }
 
-  if (!det) { tg.showAlert('Лицо не обнаружено. Попробуйте ещё раз.'); resetToCamera(); return; }
-  capturedDet = det;
-  await wait(350);
+    if (!det) {
+      tg.showAlert('Лицо не обнаружено. Попробуйте ещё раз — лучше освещение или ближе к камере.');
+      resetToCamera();
+      return;
+    }
+    capturedDet = det;
+    await wait(250);
 
-  step(1);
-  const noBg = await removeBg(snap);
-  await wait(350);
+    step(1);
+    let noBg;
+    try {
+      noBg = await withTimeout(removeBg(snap), 12000, 'background removal');
+    } catch (e) {
+      console.warn('BG removal failed, using original:', e);
+      noBg = mk(snap.width, snap.height);
+      const bctx = noBg.getContext('2d');
+      bctx.fillStyle = '#f0f0ee';
+      bctx.fillRect(0, 0, noBg.width, noBg.height);
+      bctx.drawImage(snap, 0, 0);
+    }
+    await wait(200);
 
-  step(2);
-  const retouched = retouch(noBg);
-  await wait(300);
+    step(2);
+    let retouched;
+    try {
+      retouched = retouch(noBg);
+    } catch (e) {
+      console.warn('Retouch failed:', e);
+      retouched = noBg;
+    }
+    await wait(200);
 
-  step(3);
-  capturedImg = await c2i(retouched);
-  await wait(300);
+    step(3);
+    capturedImg = await c2i(retouched);
+    await wait(200);
 
-  $('origThumb').src = snap.toDataURL('image/jpeg', 0.6);
-  resetSliders();
-  showScreen('screenResult');
-  render();
-  tg.MainButton.show();
+    $('origThumb').src = snap.toDataURL('image/jpeg', 0.6);
+    resetSliders();
+    showScreen('screenResult');
+    render();
+    tg.MainButton.show();
+  } catch (e) {
+    console.error('processSnap error:', e);
+    tg.showAlert('Ошибка обработки: ' + (e.message || e) + '\nПопробуйте ещё раз.');
+    resetToCamera();
+  }
+}
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' timeout')), ms))
+  ]);
 }
 
 // ── Background removal ────────────────────────────────────────
@@ -439,26 +531,42 @@ function removeBg(src) {
   return new Promise(resolve => {
     const out = mk(src.width, src.height);
     const ctx = out.getContext('2d');
+    let done = false;
 
-    segment.onResults(({ segmentationMask }) => {
+    const fallback = () => {
+      if (done) return; done = true;
       ctx.fillStyle = '#f0f0ee';
-      ctx.fillRect(0, 0, out.width, out.height);
-
-      const tmp = mk(src.width, src.height);
-      const tc  = tmp.getContext('2d');
-      tc.drawImage(src, 0, 0);
-      tc.globalCompositeOperation = 'destination-in';
-      tc.drawImage(segmentationMask, 0, 0, src.width, src.height);
-
-      ctx.drawImage(tmp, 0, 0);
+      ctx.fillRect(0, 0, src.width, src.height);
+      ctx.drawImage(src, 0, 0);
       resolve(out);
-    });
+    };
 
-    segment.send({ image: src }).catch(() => {
-      // Fallback: white bg + original
-      ctx.fillStyle = '#f0f0ee'; ctx.fillRect(0, 0, src.width, src.height);
-      ctx.drawImage(src, 0, 0); resolve(out);
-    });
+    // Hard timeout: if MediaPipe hangs, just use original on white bg
+    const timer = setTimeout(fallback, 7000);
+
+    try {
+      segment.onResults(({ segmentationMask }) => {
+        if (done) return; done = true;
+        clearTimeout(timer);
+
+        ctx.fillStyle = '#f0f0ee';
+        ctx.fillRect(0, 0, out.width, out.height);
+
+        const tmp = mk(src.width, src.height);
+        const tc  = tmp.getContext('2d');
+        tc.drawImage(src, 0, 0);
+        tc.globalCompositeOperation = 'destination-in';
+        tc.drawImage(segmentationMask, 0, 0, src.width, src.height);
+
+        ctx.drawImage(tmp, 0, 0);
+        resolve(out);
+      });
+
+      segment.send({ image: src }).catch(fallback);
+    } catch (e) {
+      clearTimeout(timer);
+      fallback();
+    }
   });
 }
 
