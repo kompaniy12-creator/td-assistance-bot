@@ -621,8 +621,9 @@ function render() {
 
 function calcCrop() {
   const b  = capturedDet.detection.box;
+  // ICAO/Polish layout for 35×45 mm: ~16% hair · 75% face · 9% chin→shoulders
   const pH = b.height / fRatio, pW = pH * ASPECT;
-  return { x: b.x+b.width/2 - pW/2, y: b.y - pH*.08 - vOff, w: pW, h: pH };
+  return { x: b.x+b.width/2 - pW/2, y: b.y - pH*.16 - vOff, w: pW, h: pH };
 }
 
 function drawResult(crop) {
