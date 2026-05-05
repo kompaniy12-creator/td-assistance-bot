@@ -252,6 +252,7 @@ const NEED_GOOD = 18;
 let ready = false, segment = null, stream = null;
 let rafId = null, detecting = false, goodFrames = 0;
 let capturedImg = null, capturedDet = null;
+let lastLiveDet = null;       // most recent good detection from live video
 let vOff = 0, fRatio = 0.75, jpgQ = 0.92;
 
 const $ = id => document.getElementById(id);
@@ -403,7 +404,7 @@ function startLoop() {
       else if (off  > 0.4) { status='side';  hint=(fcx<g.cx)?'→  Вправо':'←  Влево'; icon='↔️'; }
       else if (offY > 0.55){ status='vert';  hint=(fcy<g.headCy)?'↓  Вниз':'↑  Вверх'; icon='↕️'; }
       else if (ang > 5)    { status='tilt';  hint='📐  Держите голову ровно';        icon='📐'; }
-      else                 { status='ok';    hint='✅  Хорошо! Держите…';            icon='✅'; }
+      else                 { status='ok';    hint='✅  Хорошо! Держите…';            icon='✅'; lastLiveDet = det; }
     }
 
     // Countdown / auto-capture
@@ -446,9 +447,9 @@ async function capture() {
   const video = $('video');
   const vw = video.videoWidth || 1280, vh = video.videoHeight || 1280;
   const snap = mk(vw, vh);
-  const sctx = snap.getContext('2d');
-  sctx.translate(vw, 0); sctx.scale(-1, 1); // un-mirror selfie
-  sctx.drawImage(video, 0, 0);
+  // Draw video frame as-is (camera already gives natural orientation;
+  // CSS mirror was only for preview, not for the captured pixels)
+  snap.getContext('2d').drawImage(video, 0, 0);
 
   await processSnap(snap);
 }
@@ -461,19 +462,24 @@ async function processSnap(snap) {
 
   try {
     step(0);
-    // Try multiple inputSizes (face-api works better when size matches face scale)
-    let det = null;
-    for (const inputSize of [512, 416, 320, 608, 224]) {
-      try {
-        det = await withTimeout(
-          faceapi
-            .detectSingleFace(snap, new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold:.2 }))
-            .withFaceLandmarks(),
-          5000, `detect@${inputSize}`
-        );
-        if (det) break;
-      } catch (e) {
-        console.warn(`Detection failed @ inputSize=${inputSize}:`, e);
+    // 1) Если есть детекция из live-цикла (автозахват) — используем её,
+    //    координаты совпадают с снимком т.к. снимок берётся из того же видео
+    let det = lastLiveDet;
+
+    // 2) Иначе (ручной снимок / галерея) — пробуем несколько размеров
+    if (!det) {
+      for (const inputSize of [512, 416, 320, 608, 224]) {
+        try {
+          det = await withTimeout(
+            faceapi
+              .detectSingleFace(snap, new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold:.2 }))
+              .withFaceLandmarks(),
+            5000, `detect@${inputSize}`
+          );
+          if (det) break;
+        } catch (e) {
+          console.warn(`Detection failed @ inputSize=${inputSize}:`, e);
+        }
       }
     }
 
@@ -483,6 +489,7 @@ async function processSnap(snap) {
       return;
     }
     capturedDet = det;
+    lastLiveDet = null;
     await wait(200);
 
     step(1);
@@ -704,7 +711,8 @@ function showScreen(n) {
 }
 function resetToCamera() {
   tg.MainButton.hide();
-  capturedImg = capturedDet = null; goodFrames = 0; resetSliders();
+  capturedImg = capturedDet = lastLiveDet = null;
+  goodFrames = 0; resetSliders();
   $('ringCircle').style.strokeDashoffset = RING_C;
   showScreen('screenCamera'); startCamera();
 }
