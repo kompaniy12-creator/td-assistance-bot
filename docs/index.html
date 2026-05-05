@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Биометрическое фото</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
@@ -458,26 +461,29 @@ async function processSnap(snap) {
 
   try {
     step(0);
-    // Use canvas directly with face-api (skip dataURL roundtrip)
+    // Try multiple inputSizes (face-api works better when size matches face scale)
     let det = null;
-    try {
-      det = await withTimeout(
-        faceapi
-          .detectSingleFace(snap, new faceapi.TinyFaceDetectorOptions({ inputSize:512, scoreThreshold:.3 }))
-          .withFaceLandmarks(),
-        8000, 'face detection'
-      );
-    } catch (e) {
-      console.error('Face detection failed:', e);
+    for (const inputSize of [512, 416, 320, 608, 224]) {
+      try {
+        det = await withTimeout(
+          faceapi
+            .detectSingleFace(snap, new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold:.2 }))
+            .withFaceLandmarks(),
+          5000, `detect@${inputSize}`
+        );
+        if (det) break;
+      } catch (e) {
+        console.warn(`Detection failed @ inputSize=${inputSize}:`, e);
+      }
     }
 
     if (!det) {
-      tg.showAlert('Лицо не обнаружено. Попробуйте ещё раз — лучше освещение или ближе к камере.');
+      tg.showAlert('Лицо не распознано. Попробуйте:\n• Лучше освещение\n• Не подносить камеру слишком близко\n• Сфотографировать по кнопке вручную');
       resetToCamera();
       return;
     }
     capturedDet = det;
-    await wait(250);
+    await wait(200);
 
     step(1);
     let noBg;
