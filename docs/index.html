@@ -441,16 +441,19 @@ function startLoop() {
 
 // ── Capture ───────────────────────────────────────────────────
 async function capture() {
-  stopCamera();
-  showScreen('screenProcessing');
+  // Cancel detection loop but keep stream alive while we grab the frame
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
 
   const video = $('video');
   const vw = video.videoWidth || 1280, vh = video.videoHeight || 1280;
   const snap = mk(vw, vh);
-  // Draw video frame as-is (camera already gives natural orientation;
-  // CSS mirror was only for preview, not for the captured pixels)
+  // Capture pixels FIRST while video is still playing
   snap.getContext('2d').drawImage(video, 0, 0);
 
+  // Now safe to stop the camera
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+
+  showScreen('screenProcessing');
   await processSnap(snap);
 }
 
