@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Биометрическое фото</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+<style>
+:root {
+  --bg:      var(--tg-theme-bg-color,       #0d1520);
+  --surface: var(--tg-theme-secondary-bg-color, #15202e);
+  --text:    var(--tg-theme-text-color,     #e0eaf4);
+  --hint:    var(--tg-theme-hint-color,     #5a7a96);
+  --accent:  var(--tg-theme-button-color,   #2f80ed);
+  --btn-txt: var(--tg-theme-button-text-color, #fff);
+  --border:  rgba(255,255,255,.10);
+  --card:    rgba(255,255,255,.05);
+  --ok:      #27ae60;
+  --warn:    #f2994a;
+  --err:     #eb5757;
+}
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px; overflow-x: hidden;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.app { max-width: 480px; margin: 0 auto; padding: 16px 14px 120px; }
+
+/* ── Status ── */
+.status {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--hint); margin-bottom: 14px;
+  padding: 8px 12px; background: var(--card);
+  border-radius: 10px; border: 1px solid var(--border);
+}
+.dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--warn);
+}
+.dot.ready { background: var(--ok); }
+.dot.err   { background: var(--err); }
+.dot.spin  { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Upload ── */
+.upload {
+  border: 2px dashed var(--border); border-radius: 14px;
+  padding: 40px 20px; text-align: center; cursor: pointer;
+  background: var(--card); transition: border-color .2s;
+  margin-bottom: 14px;
+}
+.upload.over, .upload:active { border-color: var(--accent); }
+.upload-icon { font-size: 42px; margin-bottom: 10px; }
+.upload h2 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.upload p  { color: var(--hint); font-size: 12px; line-height: 1.5; }
+#fileInput { display: none; }
+
+/* ── Grid ── */
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px;
+}
+.card-title {
+  font-size: 10px; font-weight: 700; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--hint); margin-bottom: 10px;
+}
+
+/* ── Photos ── */
+.photo-wrap {
+  position: relative; display: flex; justify-content: center; align-items: flex-start;
+}
+.photo-wrap img, .photo-wrap canvas {
+  max-width: 100%; max-height: 280px;
+  border-radius: 6px; display: block;
+}
+#resultCanvas { border: 1px solid var(--border); }
+.face-badge {
+  position: absolute; bottom: 6px; right: 6px;
+  font-size: 10px; font-weight: 700; padding: 3px 8px;
+  border-radius: 12px; color: #fff; pointer-events: none;
+}
+
+/* ── Checks ── */
+.checks-card { margin-bottom: 10px; }
+.check-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 7px 0; border-bottom: 1px solid var(--border);
+  font-size: 12px; line-height: 1.4;
+}
+.check-item:last-child { border-bottom: none; }
+.ci-icon { flex-shrink: 0; font-size: 13px; margin-top: 1px; }
+.ci-label { font-weight: 500; }
+.ci-detail { color: var(--hint); font-size: 11px; margin-top: 1px; }
+
+/* ── Controls ── */
+.ctrls-card { margin-bottom: 10px; }
+.ctrl { margin-bottom: 12px; }
+.ctrl:last-child { margin-bottom: 0; }
+.ctrl-head {
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--hint); margin-bottom: 4px;
+  text-transform: uppercase; letter-spacing: .4px;
+}
+.ctrl-val { color: var(--accent); font-weight: 700; }
+input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+
+/* ── Reset btn ── */
+.reset-btn {
+  width: 100%; padding: 11px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--border);
+  color: var(--text); font-size: 14px; cursor: pointer;
+  margin-bottom: 8px;
+}
+.reset-btn:active { opacity: .7; }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Status -->
+  <div class="status">
+    <div class="dot spin" id="dot"></div>
+    <span id="statusMsg">Загрузка моделей…</span>
+  </div>
+
+  <!-- Upload -->
+  <div class="upload" id="uploadZone">
+    <div class="upload-icon">📷</div>
+    <h2>Загрузите ваше фото</h2>
+    <p>Нажмите или перетащите файл<br>JPG / PNG · светлый фон · смотреть прямо</p>
+    <input type="file" id="fileInput" accept="image/*" capture="user">
+  </div>
+
+  <!-- Results -->
+  <div id="results" class="hidden">
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">Оригинал</div>
+        <div class="photo-wrap">
+          <img id="origImg" alt="">
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">35 × 45 мм</div>
+        <div class="photo-wrap">
+          <canvas id="resultCanvas" width="684" height="883"></canvas>
+          <div class="face-badge hidden" id="faceBadge"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card ctrls-card">
+      <div class="card-title">Настройка кадра</div>
+
+      <div class="ctrl">
+        <div class="ctrl-head"><span>Вертикальное смещение</span><span class="ctrl-val" id="vPosLbl">0</span></div>
+        <input type="range" id="vPos" min="-100" max="100" value="0">
+      </div>
+      <div class="ctrl">
+        <div class="ctrl-head"><span>Размер лица в кадре</span><span class="ctrl-val" id="scaleLbl">75%</span></div>
+        <input type="range" id="faceScale" min="60" max="85" value="75">
+      </div>
+      <div class="ctrl">
+        <div class="ctrl-head"><span>Качество JPG</span><span class="ctrl-val" id="qualLbl">92%</span></div>
+        <input type="range" id="jpgQual" min="55" max="99" value="92">
+      </div>
+    </div>
+
+    <!-- Checks -->
+    <div class="card checks-card">
+      <div class="card-title">Проверка требований</div>
+      <div id="checks"></div>
+    </div>
+
+    <button class="reset-btn" id="resetBtn">↩ Загрузить другое фото</button>
+  </div>
+
+</div><!-- /app -->
+
+<script>
+// ── Telegram WebApp ───────────────────────────────────────────────────────
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+tg.MainButton.setText('⬇ Скачать JPG');
+tg.MainButton.color = tg.themeParams.button_color || '#2f80ed';
+
+// ── Constants ─────────────────────────────────────────────────────────────
+const OUT_W = 684, OUT_H = 883;
+const ASPECT = 35 / 45;
+const MAX_MB = 2.5;
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+
+// ── State ─────────────────────────────────────────────────────────────────
+let img = null, det = null;
+let vOff = 0, fRatio = 0.75, jpgQ = 0.92;
+
+const $ = id => document.getElementById(id);
+
+function setStatus(state, msg) {
+  $('statusMsg').textContent = msg;
+  const d = $('dot');
+  d.className = 'dot';
+  if      (state === 'ready') d.classList.add('ready');
+  else if (state === 'err')   d.classList.add('err');
+  else                        d.classList.add('spin');
+}
+
+// ── Load models ───────────────────────────────────────────────────────────
+(async function init() {
+  try {
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    setStatus('ready', 'Готово — загрузите фото');
+  } catch(e) {
+    setStatus('err', 'Ошибка загрузки. Проверьте интернет.');
+  }
+})();
+
+// ── Upload ────────────────────────────────────────────────────────────────
+const uz = $('uploadZone');
+uz.addEventListener('click', () => $('fileInput').click());
+uz.addEventListener('dragover', e => { e.preventDefault(); uz.classList.add('over'); });
+uz.addEventListener('dragleave', () => uz.classList.remove('over'));
+uz.addEventListener('drop', e => {
+  e.preventDefault(); uz.classList.remove('over');
+  const f = e.dataTransfer.files[0];
+  if (f?.type.startsWith('image/')) handle(f);
+});
+$('fileInput').addEventListener('change', e => e.target.files[0] && handle(e.target.files[0]));
+
+async function handle(file) {
+  setStatus('load', 'Обнаружение лица…');
+  tg.MainButton.hide();
+
+  img = await loadImg(file);
+  $('origImg').src = img.src;
+
+  det = await faceapi
+    .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 }))
+    .withFaceLandmarks();
+
+  if (!det) {
+    setStatus('err', 'Лицо не обнаружено. Попробуйте другое фото.');
+    tg.showAlert('Лицо не обнаружено.\nСфотографируйтесь на светлом фоне с хорошим освещением.');
+    return;
+  }
+
+  vOff = 0; fRatio = 0.75; jpgQ = 0.92;
+  $('vPos').value = 0;      $('vPosLbl').textContent = '0';
+  $('faceScale').value = 75; $('scaleLbl').textContent = '75%';
+  $('jpgQual').value = 92;   $('qualLbl').textContent = '92%';
+
+  uz.classList.add('hidden');
+  $('results').classList.remove('hidden');
+
+  render();
+  setStatus('ready', 'Лицо найдено — настройте и скачайте');
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function render() {
+  if (!img || !det) return;
+  const crop = calcCrop();
+  drawCanvas(crop);
+  validate(crop);
+}
+
+function calcCrop() {
+  const b = det.detection.box;
+  const photoH = b.height / fRatio;
+  const photoW = photoH * ASPECT;
+  const cx = b.x + b.width / 2;
+  const topPad = photoH * 0.08 + vOff;
+  return { x: cx - photoW/2, y: b.y - topPad, w: photoW, h: photoH };
+}
+
+function drawCanvas(crop) {
+  const canvas = $('resultCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = OUT_W; canvas.height = OUT_H;
+
+  ctx.fillStyle = '#f2f2f0';
+  ctx.fillRect(0, 0, OUT_W, OUT_H);
+
+  const scX = OUT_W / crop.w, scY = OUT_H / crop.h;
+  const sx = Math.max(0, crop.x);
+  const sy = Math.max(0, crop.y);
+  const sw = Math.min(img.naturalWidth  - sx, crop.w - Math.max(0, -crop.x));
+  const sh = Math.min(img.naturalHeight - sy, crop.h - Math.max(0, -crop.y));
+  const dx = Math.max(0, -crop.x) * scX;
+  const dy = Math.max(0, -crop.y) * scY;
+  ctx.drawImage(img, sx, sy, sw, sh, dx, dy, sw * scX, sh * scY);
+
+  const b = det.detection.box;
+  const facePct = b.height / crop.h;
+  const faceTopOut = (b.y - Math.max(0, crop.y)) / crop.h * OUT_H;
+  const faceHOut   = b.height / crop.h * OUT_H;
+  const inRange    = facePct >= 0.70 && facePct <= 0.80;
+
+  ctx.save();
+  ctx.strokeStyle = inRange ? 'rgba(39,174,96,.85)' : 'rgba(235,87,87,.85)';
+  ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+  ctx.strokeRect(OUT_W * 0.04, faceTopOut, OUT_W * 0.92, faceHOut);
+  ctx.restore();
+
+  const badge = $('faceBadge');
+  badge.textContent = Math.round(facePct * 100) + '% лица';
+  badge.style.background = inRange ? 'rgba(39,174,96,.85)' : 'rgba(235,87,87,.85)';
+  badge.classList.remove('hidden');
+
+  // eye line
+  const lm = det.landmarks;
+  const avgY = pts => pts.reduce((s,p)=>s+p.y,0)/pts.length;
+  const eyeY = (avgY(lm.getLeftEye()) + avgY(lm.getRightEye())) / 2;
+  const eyeYOut = (eyeY - Math.max(0, crop.y)) / crop.h * OUT_H;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(86,204,242,.5)';
+  ctx.lineWidth = 1.5; ctx.setLineDash([4, 6]);
+  ctx.beginPath(); ctx.moveTo(0, eyeYOut); ctx.lineTo(OUT_W, eyeYOut); ctx.stroke();
+  ctx.restore();
+}
+
+function validate(crop) {
+  const b = det.detection.box;
+  const facePct = b.height / crop.h;
+  const faceOk  = facePct >= 0.70 && facePct <= 0.80;
+
+  const lm = det.landmarks;
+  const avgY = pts => pts.reduce((s,p)=>s+p.y,0)/pts.length;
+  const avgX = pts => pts.reduce((s,p)=>s+p.x,0)/pts.length;
+  const dy_e = avgY(lm.getLeftEye()) - avgY(lm.getRightEye());
+  const dx_e = avgX(lm.getRightEye()) - avgX(lm.getLeftEye());
+  const angle = Math.abs(Math.atan2(dy_e, dx_e) * 180 / Math.PI);
+  const eyeOk = angle < 5;
+
+  $('resultCanvas').toBlob(blob => {
+    const sizeMB = blob.size / 1024 / 1024;
+    const sizeOk = sizeMB <= MAX_MB;
+    const allOk  = faceOk && sizeOk;
+
+    const items = [
+      { ok: true,    l: 'Лицо обнаружено', d: 'Автоматически' },
+      { ok: faceOk,  l: `Лицо ${Math.round(facePct*100)}% высоты (70–80%)`, d: faceOk ? 'В норме' : 'Измените «Размер лица»' },
+      { ok: eyeOk,   l: `Линия глаз: ${angle.toFixed(1)}° (норма < 5°)`, d: eyeOk ? 'Параллельна краю' : 'Выровняйте голову' },
+      { ok: true,    l: `${OUT_W}×${OUT_H} px (мин. 684×883)`, d: 'Соответствует' },
+      { ok: sizeOk,  l: `${sizeMB.toFixed(2)} МБ (макс. 2.5 МБ)`, d: sizeOk ? 'Соответствует' : 'Снизьте качество JPG' },
+    ];
+
+    $('checks').innerHTML = items.map(it => `
+      <div class="check-item">
+        <span class="ci-icon">${it.ok ? '✅' : '⚠️'}</span>
+        <div>
+          <div class="ci-label">${it.l}</div>
+          <div class="ci-detail">${it.d}</div>
+        </div>
+      </div>`).join('');
+
+    tg.MainButton.setText(`⬇ Скачать JPG · ${sizeMB.toFixed(2)} МБ`);
+    if (allOk) tg.MainButton.show();
+    else       tg.MainButton.show(); // показываем всегда, но предупреждаем
+  }, 'image/jpeg', jpgQ);
+}
+
+// ── Download via Telegram MainButton ─────────────────────────────────────
+tg.MainButton.onClick(() => {
+  $('resultCanvas').toBlob(blob => {
+    const url = URL.createObjectURL(blob);
+    const a   = Object.assign(document.createElement('a'), {
+      href: url, download: 'biometric_photo.jpg'
+    });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }, 'image/jpeg', jpgQ);
+});
+
+// ── Controls ──────────────────────────────────────────────────────────────
+$('vPos').addEventListener('input', function() {
+  vOff = +this.value;
+  $('vPosLbl').textContent = vOff > 0 ? '+' + vOff : vOff;
+  render();
+});
+$('faceScale').addEventListener('input', function() {
+  fRatio = +this.value / 100;
+  $('scaleLbl').textContent = this.value + '%';
+  render();
+});
+$('jpgQual').addEventListener('input', function() {
+  jpgQ = +this.value / 100;
+  $('qualLbl').textContent = this.value + '%';
+  render();
+});
+
+$('resetBtn').addEventListener('click', () => {
+  img = det = null;
+  $('fileInput').value = '';
+  $('origImg').src = '';
+  $('faceBadge').classList.add('hidden');
+  $('results').classList.add('hidden');
+  $('uploadZone').classList.remove('hidden');
+  tg.MainButton.hide();
+  setStatus('ready', 'Готово — загрузите фото');
+});
+
+function loadImg(file) {
+  return new Promise((res, rej) => {
+    const i = new Image();
+    const url = URL.createObjectURL(file);
+    i.onload = () => { URL.revokeObjectURL(url); res(i); };
+    i.onerror = rej;
+    i.src = url;
+  });
+}
+</script>
+</body>
+</html>
