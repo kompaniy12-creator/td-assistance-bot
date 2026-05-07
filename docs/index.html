@@ -271,7 +271,7 @@ const I18N = {
     errLowRes: 'Разрешение слишком низкое (мин. 400×500 px)',
     errNoFace: 'Лицо не обнаружено. Попробуйте при лучшем освещении',
     errMultipleFaces: 'На фото несколько лиц — нужен только один человек',
-    errFaceTooSmall: 'Лицо слишком далеко — займите минимум 15% кадра',
+    errFaceTooSmall: 'Лицо слишком далеко — подойдите ближе к камере',
     errEyesClosed: 'Глаза закрыты или прищурены — откройте глаза шире',
     errHeadTilt: 'Голова повёрнута/наклонена — смотрите прямо в камеру',
     // Result checks
@@ -301,7 +301,7 @@ const I18N = {
     chk_MinResolution: 'Минимальное разрешение исходника',
     chk_ValidRecognition: 'Лицо распознано',
     chk_MoreThanOneFace: 'Только одно лицо',
-    chk_MinFaceSize: 'Лицо ≥ 15% кадра',
+    chk_MinFaceSize: 'Лицо ≥ 18% высоты кадра',
     chk_EyesOpen: 'Глаза открыты',
     chk_HeadPose: 'Голова прямо (≤ 15°)',
     chk_AiProcessed: 'AI обработка завершена',
@@ -339,7 +339,7 @@ const I18N = {
     errLowRes: 'Роздільна здатність занадто низька (мін. 400×500 px)',
     errNoFace: 'Обличчя не виявлено. Спробуйте при кращому освітленні',
     errMultipleFaces: 'На фото кілька облич — потрібна тільки одна людина',
-    errFaceTooSmall: 'Обличчя занадто далеко — займіть мінімум 15% кадру',
+    errFaceTooSmall: 'Обличчя занадто далеко — підійдіть ближче до камери',
     errEyesClosed: 'Очі закриті або примружені — відкрийте очі ширше',
     errHeadTilt: 'Голова повернута/нахилена — дивіться прямо в камеру',
     chkFaceFound: 'Обличчя виявлено',
@@ -368,7 +368,7 @@ const I18N = {
     chk_MinResolution: 'Мін. роздільна здатність',
     chk_ValidRecognition: 'Обличчя розпізнано',
     chk_MoreThanOneFace: 'Тільки одне обличчя',
-    chk_MinFaceSize: 'Обличчя ≥ 15% кадру',
+    chk_MinFaceSize: 'Обличчя ≥ 18% висоти кадру',
     chk_EyesOpen: 'Очі відкриті',
     chk_HeadPose: 'Голова рівно (≤ 15°)',
     chk_AiProcessed: 'AI-обробку завершено',
@@ -406,7 +406,7 @@ const I18N = {
     errLowRes: 'Rozdzielczość zbyt niska (min. 400×500 px)',
     errNoFace: 'Nie wykryto twarzy. Spróbuj przy lepszym oświetleniu',
     errMultipleFaces: 'Wykryto kilka twarzy — potrzebna tylko jedna osoba',
-    errFaceTooSmall: 'Twarz zbyt mała — powinna zajmować min. 15% kadru',
+    errFaceTooSmall: 'Twarz zbyt daleko — podejdź bliżej do kamery',
     errEyesClosed: 'Oczy zamknięte lub zmrużone — szerzej otwórz oczy',
     errHeadTilt: 'Głowa obrócona/przechylona — patrz prosto w kamerę',
     chkFaceFound: 'Wykryto twarz',
@@ -435,7 +435,7 @@ const I18N = {
     chk_MinResolution: 'Min. rozdzielczość źródła',
     chk_ValidRecognition: 'Wykryto twarz',
     chk_MoreThanOneFace: 'Tylko jedna twarz',
-    chk_MinFaceSize: 'Twarz ≥ 15% kadru',
+    chk_MinFaceSize: 'Twarz ≥ 18% wysokości kadru',
     chk_EyesOpen: 'Oczy otwarte',
     chk_HeadPose: 'Głowa prosto (≤ 15°)',
     chk_AiProcessed: 'AI przetworzono',
@@ -473,7 +473,7 @@ const I18N = {
     errLowRes: 'Resolution too low (min. 400×500 px)',
     errNoFace: 'No face detected. Try better lighting',
     errMultipleFaces: 'Multiple faces detected — only one person allowed',
-    errFaceTooSmall: 'Face too small — should be at least 15% of frame',
+    errFaceTooSmall: 'Face too far — move closer to the camera',
     errEyesClosed: 'Eyes closed or squinting — open eyes wider',
     errHeadTilt: 'Head tilted/turned — look straight into the camera',
     chkFaceFound: 'Face detected',
@@ -502,7 +502,7 @@ const I18N = {
     chk_MinResolution: 'Min. source resolution',
     chk_ValidRecognition: 'Face recognized',
     chk_MoreThanOneFace: 'Only one face',
-    chk_MinFaceSize: 'Face ≥ 15% of frame',
+    chk_MinFaceSize: 'Face ≥ 18% of frame height',
     chk_EyesOpen: 'Eyes open',
     chk_HeadPose: 'Head straight (≤ 15°)',
     chk_AiProcessed: 'AI processing completed',
@@ -551,7 +551,7 @@ const PROFILES = {
     photosPerPrintout: 4,
     minInputW: 400, minInputH: 500,
     maxInputBytes: 20 * 1024 * 1024,
-    minFaceFrameRatio: 0.15,
+    minFaceHeightRatio: 0.18,        // face height ≥ 18% of frame height (works for raw phone selfies)
     minEar: 0.18,
     maxHeadTiltDeg: 15,
     minFaceSimilarity: 0.85,
@@ -811,12 +811,13 @@ function runPreChecks(snap, allDetections, single) {
   // Exactly one face
   checks.push(mkCheck('MoreThanOneFace', faceCount === 1, { detail: `${faceCount}` }));
 
-  // Face size in frame
+  // Face size in frame — by HEIGHT ratio (more robust for raw phone selfies
+  // than area, which is too strict at 1080×1920 where face area is naturally < 15%).
   if (single) {
     const b = single.detection.box;
-    const ratio = (b.width * b.height) / (snap.width * snap.height);
-    checks.push(mkCheck('MinFaceSize', ratio >= P.minFaceFrameRatio,
-      { detail: `${(ratio * 100).toFixed(0)}%` }));
+    const ratio = b.height / snap.height;
+    checks.push(mkCheck('MinFaceSize', ratio >= P.minFaceHeightRatio,
+      { detail: `${(ratio * 100).toFixed(0)}% h` }));
   } else {
     checks.push(mkCheck('MinFaceSize', false));
   }
