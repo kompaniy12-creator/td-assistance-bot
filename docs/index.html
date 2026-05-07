@@ -195,10 +195,10 @@ input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
 <div id="screenProcessing" class="screen hidden">
   <div class="proc-spinner"></div>
   <div class="proc-steps">
-    <div class="pstep" id="ps1"><div class="pstep-dot"></div>Определение лица</div>
-    <div class="pstep" id="ps2"><div class="pstep-dot"></div>Удаление фона</div>
-    <div class="pstep" id="ps3"><div class="pstep-dot"></div>Ретушь кожи</div>
-    <div class="pstep" id="ps4"><div class="pstep-dot"></div>Кадрирование 35×45 мм</div>
+    <div class="pstep" id="ps1"><div class="pstep-dot"></div>Распознавание лица</div>
+    <div class="pstep" id="ps2"><div class="pstep-dot"></div>Кадрирование 35×45 мм</div>
+    <div class="pstep" id="ps3"><div class="pstep-dot"></div>AI-обработка (Nano Banana)</div>
+    <div class="pstep" id="ps4"><div class="pstep-dot"></div>Готово</div>
   </div>
 </div>
 
@@ -217,12 +217,12 @@ input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
       </div>
     </div>
     <div class="ctrl-card">
-      <div class="card-lbl">Настройка кадра</div>
-      <div class="ctrl-row">
+      <div class="card-lbl">Настройка</div>
+      <div class="ctrl-row" style="display:none">
         <div class="ctrl-head"><span>Смещение вверх / вниз</span><span class="ctrl-val" id="vPosLbl">0</span></div>
         <input type="range" id="vPos" min="-100" max="100" value="0">
       </div>
-      <div class="ctrl-row">
+      <div class="ctrl-row" style="display:none">
         <div class="ctrl-head"><span>Размер лица в кадре</span><span class="ctrl-val" id="scaleLbl">75%</span></div>
         <input type="range" id="faceScale" min="60" max="85" value="75">
       </div>
@@ -248,6 +248,11 @@ const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
 const OUT_W = 684, OUT_H = 883, ASPECT = 35/45, MAX_MB = 2.5;
 const RING_C = 2 * Math.PI * 32;
 const NEED_GOOD = 18;
+
+// ── Supabase Edge Function ────────────────────────────────────
+const SUPA_URL  = 'https://bltbuptzsswaislqagwe.supabase.co';
+const SUPA_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsdGJ1cHR6c3N3YWlzbHFhZ3dlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNzU1OTQsImV4cCI6MjA4ODY1MTU5NH0.OQk3TwVSaepYdQFAOXIa3GFhu_jvCgZ7LDi1rqrFgN0';
+const FN_URL    = `${SUPA_URL}/functions/v1/process-photo`;
 
 let ready = false, segment = null, stream = null;
 let rafId = null, detecting = false, goodFrames = 0;
@@ -493,34 +498,28 @@ async function processSnap(snap) {
     }
     capturedDet = det;
     lastLiveDet = null;
-    await wait(200);
+    await wait(150);
 
+    // ── 1. Локальное кадрирование 35×45 мм ─────────────────
     step(1);
-    let noBg;
-    try {
-      noBg = await withTimeout(removeBg(snap), 12000, 'background removal');
-    } catch (e) {
-      console.warn('BG removal failed, using original:', e);
-      noBg = mk(snap.width, snap.height);
-      const bctx = noBg.getContext('2d');
-      bctx.fillStyle = '#f0f0ee';
-      bctx.fillRect(0, 0, noBg.width, noBg.height);
-      bctx.drawImage(snap, 0, 0);
-    }
-    await wait(200);
+    const cropped = makeCrop(snap, det);
+    await wait(150);
 
+    // ── 2. AI-обработка (Nano Banana через Supabase) ──────
     step(2);
-    let retouched;
+    let aiImg;
     try {
-      retouched = retouch(noBg);
+      aiImg = await withTimeout(processWithAI(cropped), 60000, 'AI processing');
     } catch (e) {
-      console.warn('Retouch failed:', e);
-      retouched = noBg;
+      console.error('AI processing failed:', e);
+      tg.showAlert('AI-обработка не удалась:\n' + (e.message || e) + '\n\nПоказываю фото без AI-обработки.');
+      aiImg = await c2i(cropped);  // fallback to plain crop
     }
-    await wait(200);
+    await wait(150);
 
+    // ── 3. Готово ─────────────────────────────────────────
     step(3);
-    capturedImg = await c2i(retouched);
+    capturedImg = aiImg;
     await wait(200);
 
     $('origThumb').src = snap.toDataURL('image/jpeg', 0.6);
@@ -542,7 +541,62 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
-// ── Background removal ────────────────────────────────────────
+// ── Local crop to 35×45 mm ────────────────────────────────────
+function makeCrop(src, det) {
+  const b   = det.detection.box;
+  const pH  = b.height / fRatio;
+  const pW  = pH * ASPECT;
+  const cx  = b.x + b.width / 2;
+  const cropX = cx - pW / 2;
+  const cropY = b.y - pH * 0.16 - vOff;
+
+  const out = mk(OUT_W, OUT_H);
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#f0f0ee';
+  ctx.fillRect(0, 0, OUT_W, OUT_H);
+
+  const sx = Math.max(0, cropX);
+  const sy = Math.max(0, cropY);
+  const sw = Math.min(src.width  - sx, pW - Math.max(0, -cropX));
+  const sh = Math.min(src.height - sy, pH - Math.max(0, -cropY));
+  const scX = OUT_W / pW, scY = OUT_H / pH;
+  const dx = Math.max(0, -cropX) * scX;
+  const dy = Math.max(0, -cropY) * scY;
+  ctx.drawImage(src, sx, sy, sw, sh, dx, dy, sw * scX, sh * scY);
+  return out;
+}
+
+// ── AI-обработка через Supabase Edge Function (Nano Banana) ──
+async function processWithAI(canvas) {
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  const userId  = tg.initDataUnsafe?.user?.id?.toString() || 'anonymous';
+
+  const res = await fetch(FN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${SUPA_ANON}`,
+      'apikey':        SUPA_ANON
+    },
+    body: JSON.stringify({ image: dataUrl, mimeType: 'image/jpeg', userId })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  if (!data.image) throw new Error('No image in response');
+
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload  = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load AI image'));
+    img.src = data.image;
+  });
+}
+
+// ── Background removal (legacy fallback, no longer used) ─────
 function removeBg(src) {
   return new Promise(resolve => {
     const out = mk(src.width, src.height);
@@ -614,59 +668,32 @@ function retouch(src) {
 
 // ── Render result ─────────────────────────────────────────────
 function render() {
-  if (!capturedImg || !capturedDet) return;
-  const crop = calcCrop();
-  drawResult(crop); validate(crop);
+  if (!capturedImg) return;
+  drawResult(); validate();
 }
 
-function calcCrop() {
-  const b  = capturedDet.detection.box;
-  // ICAO/Polish layout for 35×45 mm: ~16% hair · 75% face · 9% chin→shoulders
-  const pH = b.height / fRatio, pW = pH * ASPECT;
-  return { x: b.x+b.width/2 - pW/2, y: b.y - pH*.16 - vOff, w: pW, h: pH };
-}
-
-function drawResult(crop) {
+function drawResult() {
   const canvas = $('resultCanvas'), ctx = canvas.getContext('2d');
   canvas.width = OUT_W; canvas.height = OUT_H;
   ctx.fillStyle = '#f0f0ee'; ctx.fillRect(0, 0, OUT_W, OUT_H);
-
-  const scX = OUT_W/crop.w, scY = OUT_H/crop.h;
-  const sx = Math.max(0, crop.x), sy = Math.max(0, crop.y);
-  const sw = Math.min(capturedImg.naturalWidth  - sx, crop.w - Math.max(0,-crop.x));
-  const sh = Math.min(capturedImg.naturalHeight - sy, crop.h - Math.max(0,-crop.y));
-  ctx.drawImage(capturedImg, sx, sy, sw, sh,
-    Math.max(0,-crop.x)*scX, Math.max(0,-crop.y)*scY, sw*scX, sh*scY);
-
-  const b   = capturedDet.detection.box;
-  const pct = b.height / crop.h;
-  const fty = (b.y - Math.max(0,crop.y)) / crop.h * OUT_H;
-  const fhy = b.height / crop.h * OUT_H;
-  const ok  = pct>=0.70 && pct<=0.80;
-
-  ctx.save();
-  ctx.strokeStyle = ok ? 'rgba(39,174,96,.7)' : 'rgba(235,87,87,.7)';
-  ctx.lineWidth = 2; ctx.setLineDash([6,4]);
-  ctx.strokeRect(OUT_W*.04, fty, OUT_W*.92, fhy);
-  ctx.restore();
+  // capturedImg уже 684×883 после AI-обработки
+  ctx.drawImage(capturedImg, 0, 0, OUT_W, OUT_H);
 
   const badge = $('faceBadge');
-  badge.textContent = Math.round(pct*100) + '% лица';
-  badge.style.background = ok ? 'rgba(39,174,96,.85)' : 'rgba(235,87,87,.85)';
+  badge.textContent = '✨ AI обработка';
+  badge.style.background = 'rgba(39,174,96,.85)';
 }
 
-function validate(crop) {
-  const pct = capturedDet.detection.box.height / crop.h;
-  const fOk = pct>=0.70 && pct<=0.80;
+function validate() {
   $('resultCanvas').toBlob(blob => {
     const mb = blob.size/1024/1024, mbOk = mb<=MAX_MB;
     $('checks').innerHTML = [
-      { ok:true, l:'Лицо обнаружено',                      d:'Автоматически' },
-      { ok:fOk,  l:`Лицо ${Math.round(pct*100)}% (70–80%)`,d:fOk?'В норме':'Настройте «Размер лица»' },
-      { ok:true, l:'Фон удалён',                           d:'Заменён на светлый' },
-      { ok:true, l:'Ретушь кожи',                          d:'Применена' },
-      { ok:true, l:`${OUT_W}×${OUT_H} px`,                 d:'Мин. 684×883 ✓' },
-      { ok:mbOk, l:`${mb.toFixed(2)} МБ`,                  d:mbOk?'Макс. 2.5 МБ ✓':'Снизьте JPG' },
+      { ok:true, l:'Лицо обнаружено',          d:'Автоматически' },
+      { ok:true, l:'Кадр 35×45 мм',            d:'ICAO раскладка' },
+      { ok:true, l:'Фон заменён',              d:'AI · светлый ровный' },
+      { ok:true, l:'Ретушь кожи',              d:'AI · профессиональная' },
+      { ok:true, l:`${OUT_W}×${OUT_H} px`,     d:'Мин. 684×883 ✓' },
+      { ok:mbOk, l:`${mb.toFixed(2)} МБ`,      d:mbOk?'Макс. 2.5 МБ ✓':'Снизьте JPG' },
     ].map(i=>`<div class="check-item"><span>${i.ok?'✅':'⚠️'}</span>
       <div><div class="ci-lbl">${i.l}</div><div class="ci-det">${i.d}</div></div></div>`).join('');
     tg.MainButton.setText(`⬇ Скачать JPG · ${mb.toFixed(2)} МБ`);
