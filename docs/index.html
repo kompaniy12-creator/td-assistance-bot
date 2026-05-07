@@ -492,7 +492,7 @@ async function processSnap(snap) {
     }
 
     if (!det) {
-      tg.showAlert('Лицо не распознано. Попробуйте:\n• Лучше освещение\n• Не подносить камеру слишком близко\n• Сфотографировать по кнопке вручную');
+      safeAlert('Лицо не распознано. Попробуйте при лучшем освещении.');
       resetToCamera();
       return;
     }
@@ -512,7 +512,7 @@ async function processSnap(snap) {
       aiImg = await withTimeout(processWithAI(cropped), 60000, 'AI processing');
     } catch (e) {
       console.error('AI processing failed:', e);
-      tg.showAlert('AI-обработка не удалась:\n' + (e.message || e) + '\n\nПоказываю фото без AI-обработки.');
+      safeAlert('AI не сработал, показываю кадрированное фото без AI');
       aiImg = await c2i(cropped);  // fallback to plain crop
     }
     await wait(150);
@@ -529,7 +529,7 @@ async function processSnap(snap) {
     tg.MainButton.show();
   } catch (e) {
     console.error('processSnap error:', e);
-    tg.showAlert('Ошибка обработки: ' + (e.message || e) + '\nПопробуйте ещё раз.');
+    safeAlert('Ошибка обработки. Попробуйте ещё раз.');
     resetToCamera();
   }
 }
@@ -539,6 +539,17 @@ function withTimeout(promise, ms, label) {
     promise,
     new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' timeout')), ms))
   ]);
+}
+
+// Telegram tg.showAlert принимает строку до ~256 символов без \n
+// и падает с WebAppPopupParamInvalid если что-то не так — оборачиваем
+function safeAlert(msg) {
+  try {
+    const clean = String(msg).replace(/\s+/g, ' ').trim().slice(0, 200);
+    tg.showAlert(clean);
+  } catch (e) {
+    console.error('Alert failed:', msg, e);
+  }
 }
 
 // ── Local crop to 35×45 mm ────────────────────────────────────
