@@ -1,37 +1,28 @@
-// Биометричный промпт согласно ТЗ §6.1 (face preservation as highest priority).
+// Биометричный промпт согласно требованиям заказчика.
 // НЕ МОДИФИЦИРОВАТЬ без согласования с product owner — каждое изменение
 // требует прогона бенчмарка face similarity.
 
-export const BIOMETRIC_PROMPT_EN = `Process this photo into a biometric document photo that complies with the Polish residence permit (zezwolenie na pobyt) requirements per Rozporządzenie MSWiA.
+export const BIOMETRIC_PROMPT_EN = `Process this photo into a standard biometric document photo with 35mm x 45mm proportions (ratio 7:9, portrait orientation).
 
-CRITICAL — FACE PRESERVATION (HIGHEST PRIORITY):
-- DO NOT alter, redraw, regenerate, reshape, or modify the person's face.
-- DO NOT change facial features, skin tone, eye color/shape, nose, lips, jawline, ears, hair texture, or hair color.
-- DO NOT smooth, beautify, slim, age, de-age, or "enhance" the face.
-- Preserve every freckle, mole, scar, wrinkle, pore, and natural skin texture exactly as in the source.
-- Output face must be 100% identical to source — pixel-level fidelity to facial geometry, proportions, and identity is mandatory.
-- DO NOT add, remove, or alter glasses, makeup, jewelry, piercings, or facial hair.
-- Treat this as a non-generative edit: inpainting is allowed ONLY outside the head-and-shoulders silhouette.
+CRITICAL RULES — DO NOT VIOLATE:
+- DO NOT alter, redraw, regenerate, reshape, or modify the person's face in any way.
+- DO NOT change facial features, skin tone, eye color, eye shape, nose, lips, jawline, ears, hair texture, or hair color.
+- DO NOT smooth, beautify, slim, or "enhance" the face. Preserve every freckle, mole, scar, wrinkle, and natural skin texture exactly as in the original.
+- DO NOT change the person's identity. The output face must be 100% identical to the input face — pixel-level fidelity to facial geometry and features is required.
+- DO NOT add or remove glasses, makeup, jewelry, or facial hair.
 
-COMPOSITION (35x45 mm, 7:9 portrait):
-- Frame from top of head down to upper shoulders.
-- Face occupies 70–80% of total photo height.
-- Head centered horizontally, en face, no tilt.
-- Eye line strictly parallel to top edge.
-- Eyes open, both pupils sharp and visible.
-- Hair must not cover eyes, eyebrows, or face contour.
-- Mouth closed, neutral expression.
-- Natural skin color.
+ALLOWED EDITS ONLY:
+1. CROP to 35x45mm document standard:
+   - Head and top of shoulders visible.
+   - Top of head approximately 3-5mm from the top edge.
+   - Face (from chin to crown) occupies 70-80% of the frame height (approx. 32-36mm).
+   - Eyes positioned roughly at the upper third of the frame.
+   - Head centered horizontally, vertical and looking straight at camera.
+2. REPLACE the background with a uniform plain light background (pure white #FFFFFF or very light neutral gray #F2F2F2), evenly lit, no shadows, no gradients, no texture.
+3. LIGHT TECHNICAL RETOUCH ONLY:
+   - Even out exposure and remove harsh shadows on the face.
+   - Correct white balance for natural skin tone (without changing the actual skin color).
+   - Remove dust, sensor spots, or stray hairs ON THE BACKGROUND only — never on the face.
+4. Output sharpness suitable for print at 300 DPI.
 
-BACKGROUND:
-- Replace with uniform off-white #FCFCFC (PhotoAid / Polish ICAO practice — softer than pure white to avoid blown-out highlights when printed).
-- Evenly lit, no shadows, no gradients, no texture.
-- Clean edge along hair/shoulders, no halo.
-
-ALLOWED RETOUCH ONLY:
-- Even out exposure, soften harsh facial shadows (without changing skin color/features).
-- White balance correction for natural skin tone.
-- Remove dust/spots ONLY on background, never on face.
-- Sharpen for 300 DPI print.
-
-OUTPUT: single image, 35:45 aspect ratio, ICAO/Schengen-grade biometric portrait, ready for Polish Urząd Wojewódzki submission.`;
+Output: a clean, ICAO/Schengen-style biometric portrait, ready for printing on a Polish/EU identity document, passport, residence card, or visa application.`;
