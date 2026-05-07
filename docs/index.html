@@ -706,16 +706,9 @@ function startLoop() {
       else                 { status='ok';    hint=t('perfectHold');   icon='✅'; lastLiveDet = det; }
     }
 
-    if (status === 'ok') {
-      goodFrames = Math.min(goodFrames + 1, NEED_GOOD);
-      if (goodFrames >= NEED_GOOD) { capture(); return; }
-    } else {
-      goodFrames = Math.max(0, goodFrames - 3);
-    }
-
-    const ring = $('ringCircle');
-    ring.style.strokeDashoffset = RING_C * (1 - goodFrames/NEED_GOOD);
-    ring.style.opacity = status === 'ok' ? '1' : '0';
+    // Manual capture: no auto-trigger. The silhouette turns green when
+    // face is in the correct position; user taps the capture button.
+    if (status === 'ok') lastLiveDet = det;
 
     const clr = { none:'rgba(255,255,255,.55)', far:'#f2994a', close:'#f2994a',
                   side:'#f2994a', vert:'#f2994a', tilt:'#f2994a', ok:'#27ae60' }[status];
