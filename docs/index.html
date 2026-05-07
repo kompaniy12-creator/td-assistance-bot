@@ -6,10 +6,10 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Биометрическое фото</title>
+<title>Biometric Photo</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <style>
 :root {
   --ok:   #27ae60;
@@ -25,11 +25,9 @@ body {
   -webkit-font-smoothing:antialiased;
 }
 
-/* ── Screens ── */
 .screen { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
 .hidden { display:none !important; }
 
-/* ── Camera ── */
 #video {
   position:absolute; inset:0; width:100%; height:100%;
   object-fit:cover; transform:scaleX(-1);
@@ -91,7 +89,6 @@ body {
 .load-text { font-size:14px; color:rgba(255,255,255,.8); }
 @keyframes spin { to { transform:rotate(360deg); } }
 
-/* ── Processing ── */
 #screenProcessing { background:#0d1520; gap:20px; }
 .proc-spinner {
   width:44px; height:44px; border-radius:50%;
@@ -104,7 +101,6 @@ body {
 .pstep.done   { color:var(--ok); }
 .pstep-dot    { width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
 
-/* ── Result ── */
 #screenResult {
   background:var(--tg-theme-bg-color, #0d1520);
   overflow-y:auto; align-items:stretch; justify-content:flex-start;
@@ -126,7 +122,7 @@ body {
   font-size:10px; font-weight:700; padding:3px 9px; border-radius:12px; color:#fff;
 }
 
-.ctrl-card, .checks-card {
+.checks-card {
   background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
   border-radius:12px; padding:12px;
 }
@@ -134,12 +130,6 @@ body {
   font-size:10px; font-weight:700; letter-spacing:1px; text-transform:uppercase;
   color:rgba(255,255,255,.35); margin-bottom:10px;
 }
-.ctrl-row { margin-bottom:10px; }
-.ctrl-row:last-child { margin-bottom:0; }
-.ctrl-head { display:flex; justify-content:space-between; font-size:11px; color:rgba(255,255,255,.45); margin-bottom:4px; }
-.ctrl-val  { color:var(--blue); font-weight:700; }
-input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
-
 .check-item {
   display:flex; align-items:flex-start; gap:8px;
   padding:7px 0; border-bottom:1px solid rgba(255,255,255,.07);
@@ -149,12 +139,22 @@ input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
 .ci-lbl { font-weight:500; }
 .ci-det { color:rgba(255,255,255,.4); font-size:11px; }
 
-.retake-btn {
+.btn-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.action-btn, .retake-btn {
   width:100%; padding:12px; border-radius:10px; cursor:pointer;
   background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12);
   color:#fff; font-size:14px; font-weight:600;
 }
-.retake-btn:active { opacity:.7; }
+.action-btn.primary {
+  background:var(--blue); border-color:var(--blue);
+}
+.action-btn:active, .retake-btn:active { opacity:.7; }
+
+.warn-banner {
+  background:rgba(242,153,74,.18); border:1px solid rgba(242,153,74,.45);
+  border-radius:10px; padding:10px 12px; font-size:12px; line-height:1.4;
+  color:#ffd6a8;
+}
 </style>
 </head>
 <body>
@@ -166,18 +166,18 @@ input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
 
   <div class="load-overlay" id="loadOverlay">
     <div class="load-spinner"></div>
-    <div class="load-text">Загрузка моделей…</div>
+    <div class="load-text" data-i18n="loadingModels">Loading…</div>
   </div>
 
   <div class="hint-bar">
     <div class="hint-icon" id="hintIcon">👤</div>
-    <div class="hint-text" id="hintText">Разрешите доступ к камере</div>
+    <div class="hint-text" id="hintText" data-i18n="cameraPermission">Allow camera access</div>
   </div>
 
   <div class="capture-area">
     <div>
       <input type="file" id="fileInput" accept="image/*">
-      <label class="upload-lbl" for="fileInput">📁 Галерея</label>
+      <label class="upload-lbl" for="fileInput" id="galleryLbl" data-i18n="galleryBtn">📁 Gallery</label>
     </div>
     <div style="position:relative;width:74px;height:74px;flex-shrink:0">
       <div class="ring-wrap">
@@ -185,7 +185,7 @@ input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
           <circle id="ringCircle" cx="37" cy="37" r="32"/>
         </svg>
       </div>
-      <button class="capture-btn" id="captureBtn" aria-label="Снимок"></button>
+      <button class="capture-btn" id="captureBtn" aria-label="Snap"></button>
     </div>
     <div style="width:86px"></div>
   </div>
@@ -195,10 +195,11 @@ input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
 <div id="screenProcessing" class="screen hidden">
   <div class="proc-spinner"></div>
   <div class="proc-steps">
-    <div class="pstep" id="ps1"><div class="pstep-dot"></div>Распознавание лица</div>
-    <div class="pstep" id="ps2"><div class="pstep-dot"></div>Кадрирование 35×45 мм</div>
-    <div class="pstep" id="ps3"><div class="pstep-dot"></div>AI-обработка (Nano Banana)</div>
-    <div class="pstep" id="ps4"><div class="pstep-dot"></div>Готово</div>
+    <div class="pstep" id="ps1"><div class="pstep-dot"></div><span data-i18n="step1">Face detection</span></div>
+    <div class="pstep" id="ps2"><div class="pstep-dot"></div><span data-i18n="step2">Validation</span></div>
+    <div class="pstep" id="ps3"><div class="pstep-dot"></div><span data-i18n="step3">Crop 35×45 mm</span></div>
+    <div class="pstep" id="ps4"><div class="pstep-dot"></div><span data-i18n="step4">AI processing</span></div>
+    <div class="pstep" id="ps5"><div class="pstep-dot"></div><span data-i18n="step5">Identity check</span></div>
   </div>
 </div>
 
@@ -207,45 +208,362 @@ input[type=range] { width:100%; accent-color:var(--blue); cursor:pointer; }
   <div class="result-wrap">
     <div class="photo-row">
       <div class="pcard">
-        <div class="pcard-lbl">Оригинал</div>
+        <div class="pcard-lbl" data-i18n="originalLbl">Original</div>
         <img id="origThumb" alt="">
       </div>
       <div class="pcard">
-        <div class="pcard-lbl">Результат</div>
+        <div class="pcard-lbl" data-i18n="resultLbl">Result</div>
         <canvas id="resultCanvas" width="684" height="883"></canvas>
         <div id="faceBadge" class="face-badge"></div>
       </div>
     </div>
-    <div class="ctrl-card">
-      <div class="card-lbl">Настройка</div>
-      <div class="ctrl-row" style="display:none">
-        <div class="ctrl-head"><span>Смещение вверх / вниз</span><span class="ctrl-val" id="vPosLbl">0</span></div>
-        <input type="range" id="vPos" min="-100" max="100" value="0">
-      </div>
-      <div class="ctrl-row" style="display:none">
-        <div class="ctrl-head"><span>Размер лица в кадре</span><span class="ctrl-val" id="scaleLbl">75%</span></div>
-        <input type="range" id="faceScale" min="60" max="85" value="75">
-      </div>
-      <div class="ctrl-row">
-        <div class="ctrl-head"><span>Качество JPG</span><span class="ctrl-val" id="qualLbl">92%</span></div>
-        <input type="range" id="jpgQual" min="55" max="99" value="92">
-      </div>
-    </div>
+
+    <div id="warnBanner" class="warn-banner hidden"></div>
+
     <div class="checks-card">
-      <div class="card-lbl">Проверка требований</div>
+      <div class="card-lbl" data-i18n="checksLbl">Requirements</div>
       <div id="checks"></div>
     </div>
-    <button class="retake-btn" id="retakeBtn">↩ Переснять</button>
+
+    <div class="btn-row">
+      <button class="action-btn" id="pdfBtn" data-i18n="pdfBtn">📄 A4 PDF (4 photos)</button>
+      <button class="action-btn" id="linesBtn" data-i18n="linesBtn">📐 Guide lines</button>
+    </div>
+    <button class="retake-btn" id="retakeBtn" data-i18n="retakeBtn">↩ Retake</button>
+    <div id="pkLine" style="text-align:center;font-size:10px;color:rgba(255,255,255,.3);letter-spacing:1px;font-family:monospace;margin-top:4px"></div>
   </div>
 </div>
 
 <script>
+// ── Telegram WebApp ──────────────────────────────────────────
 const tg = window.Telegram.WebApp;
 tg.ready(); tg.expand();
-tg.MainButton.setText('⬇ Скачать фото');
 
+// ── i18n ─────────────────────────────────────────────────────
+const I18N = {
+  ru: {
+    loadingModels: 'Загрузка моделей…',
+    cameraPermission: 'Разрешите доступ к камере',
+    galleryBtn: '📁 Галерея',
+    placeFace: 'Поместите лицо в контур',
+    moveCloser: '🔍  Подойдите ближе',
+    moveFurther: '↔️  Отойдите дальше',
+    moveRight: '→  Вправо',
+    moveLeft: '←  Влево',
+    moveDown: '↓  Вниз',
+    moveUp: '↑  Вверх',
+    holdStraight: '📐  Держите голову ровно',
+    perfectHold: '✅  Хорошо! Держите…',
+    step1: 'Распознавание лица',
+    step2: 'Проверка фото',
+    step3: 'Кадрирование 35×45 мм',
+    step4: 'AI-обработка',
+    step5: 'Проверка идентичности',
+    originalLbl: 'Оригинал',
+    resultLbl: 'Результат',
+    checksLbl: 'Проверка требований',
+    pdfBtn: '📄 PDF · 4 фото на A4',
+    retakeBtn: '↩ Переснять',
+    downloadJpg: '⬇ Скачать JPG · {mb} МБ',
+    badgeAi: '✨ AI обработано',
+    // Validation errors
+    errFileSize: 'Файл больше 20 МБ — выберите другое фото',
+    errLowRes: 'Разрешение слишком низкое (мин. 400×500 px)',
+    errNoFace: 'Лицо не обнаружено. Попробуйте при лучшем освещении',
+    errMultipleFaces: 'На фото несколько лиц — нужен только один человек',
+    errFaceTooSmall: 'Лицо слишком далеко — займите минимум 15% кадра',
+    errEyesClosed: 'Глаза закрыты или прищурены — откройте глаза шире',
+    errHeadTilt: 'Голова повёрнута/наклонена — смотрите прямо в камеру',
+    // Result checks
+    chkFaceFound: 'Лицо обнаружено',
+    chkAuto: 'Автоматически',
+    chkFrame: 'Кадр 35×45 мм',
+    chkIcao: 'Польский стандарт ICAO',
+    chkBackground: 'Фон заменён',
+    chkBgDetail: 'Белый, ровный',
+    chkRetouch: 'Лёгкая ретушь',
+    chkRetouchDetail: 'Без изменения черт',
+    chkResolution: '{w}×{h} px',
+    chkResMin: 'Мин. 684×883 ✓',
+    chkSize: '{mb} МБ',
+    chkSizeOk: 'Макс. 2.5 МБ ✓',
+    chkSizeFail: 'Превышен лимит',
+    chkSimilarity: 'Сходство с оригиналом: {pct}%',
+    chkSimilarityOk: 'Лицо сохранено ≥ 85% ✓',
+    chkSimilarityFail: 'Внимание: AI изменил черты лица',
+    warnSimilarity: 'AI слишком сильно изменил лицо — рекомендуем переснять или передать оператору. Скачать всё равно можно.',
+    quotaExceeded: 'Дневной лимит AI исчерпан, попробуйте позже',
+    aiFailed: 'AI не сработал — показываю кадрированное фото без обработки',
+    procError: 'Ошибка обработки. Попробуйте ещё раз',
+    linesBtn: '📐 Линии обреза',
+    linesOn: '📐 Скрыть линии',
+    pkPrefix: 'ID',
+    chk_MinResolution: 'Минимальное разрешение исходника',
+    chk_ValidRecognition: 'Лицо распознано',
+    chk_MoreThanOneFace: 'Только одно лицо',
+    chk_MinFaceSize: 'Лицо ≥ 15% кадра',
+    chk_EyesOpen: 'Глаза открыты',
+    chk_HeadPose: 'Голова прямо (≤ 15°)',
+    chk_AiProcessed: 'AI обработка завершена',
+    chk_PhotoRatio: 'Пропорции 35×45 мм',
+    chk_OutputResolution: 'Разрешение результата ≥ 684×883',
+    chk_OutputSize: 'Размер файла ≤ 2.5 МБ',
+    chk_IdentityPreserved: 'Сходство с оригиналом ≥ 85%',
+  },
+  uk: {
+    loadingModels: 'Завантаження моделей…',
+    cameraPermission: 'Дозвольте доступ до камери',
+    galleryBtn: '📁 Галерея',
+    placeFace: 'Помістіть обличчя в контур',
+    moveCloser: '🔍  Підійдіть ближче',
+    moveFurther: '↔️  Відійдіть далі',
+    moveRight: '→  Праворуч',
+    moveLeft: '←  Ліворуч',
+    moveDown: '↓  Вниз',
+    moveUp: '↑  Вгору',
+    holdStraight: '📐  Тримайте голову рівно',
+    perfectHold: '✅  Добре! Тримайте…',
+    step1: 'Розпізнавання обличчя',
+    step2: 'Перевірка фото',
+    step3: 'Кадрування 35×45 мм',
+    step4: 'AI-обробка',
+    step5: 'Перевірка ідентичності',
+    originalLbl: 'Оригінал',
+    resultLbl: 'Результат',
+    checksLbl: 'Перевірка вимог',
+    pdfBtn: '📄 PDF · 4 фото на A4',
+    retakeBtn: '↩ Перезняти',
+    downloadJpg: '⬇ Завантажити JPG · {mb} МБ',
+    badgeAi: '✨ AI оброблено',
+    errFileSize: 'Файл більше 20 МБ — оберіть інше фото',
+    errLowRes: 'Роздільна здатність занадто низька (мін. 400×500 px)',
+    errNoFace: 'Обличчя не виявлено. Спробуйте при кращому освітленні',
+    errMultipleFaces: 'На фото кілька облич — потрібна тільки одна людина',
+    errFaceTooSmall: 'Обличчя занадто далеко — займіть мінімум 15% кадру',
+    errEyesClosed: 'Очі закриті або примружені — відкрийте очі ширше',
+    errHeadTilt: 'Голова повернута/нахилена — дивіться прямо в камеру',
+    chkFaceFound: 'Обличчя виявлено',
+    chkAuto: 'Автоматично',
+    chkFrame: 'Кадр 35×45 мм',
+    chkIcao: 'Польський стандарт ICAO',
+    chkBackground: 'Фон замінено',
+    chkBgDetail: 'Білий, рівний',
+    chkRetouch: 'Легка ретуш',
+    chkRetouchDetail: 'Без зміни рис',
+    chkResolution: '{w}×{h} px',
+    chkResMin: 'Мін. 684×883 ✓',
+    chkSize: '{mb} МБ',
+    chkSizeOk: 'Макс. 2.5 МБ ✓',
+    chkSizeFail: 'Перевищено ліміт',
+    chkSimilarity: 'Схожість з оригіналом: {pct}%',
+    chkSimilarityOk: 'Обличчя збережено ≥ 85% ✓',
+    chkSimilarityFail: 'Увага: AI змінив риси обличчя',
+    warnSimilarity: 'AI занадто сильно змінив обличчя — рекомендуємо перезняти або передати оператору. Завантажити можна.',
+    quotaExceeded: 'Денний ліміт AI вичерпано, спробуйте пізніше',
+    aiFailed: 'AI не спрацював — показую кадроване фото без обробки',
+    procError: 'Помилка обробки. Спробуйте ще раз',
+    linesBtn: '📐 Лінії обрізу',
+    linesOn: '📐 Сховати лінії',
+    pkPrefix: 'ID',
+    chk_MinResolution: 'Мін. роздільна здатність',
+    chk_ValidRecognition: 'Обличчя розпізнано',
+    chk_MoreThanOneFace: 'Тільки одне обличчя',
+    chk_MinFaceSize: 'Обличчя ≥ 15% кадру',
+    chk_EyesOpen: 'Очі відкриті',
+    chk_HeadPose: 'Голова рівно (≤ 15°)',
+    chk_AiProcessed: 'AI-обробку завершено',
+    chk_PhotoRatio: 'Пропорції 35×45 мм',
+    chk_OutputResolution: 'Роздільна здатність результату ≥ 684×883',
+    chk_OutputSize: 'Розмір файлу ≤ 2.5 МБ',
+    chk_IdentityPreserved: 'Схожість з оригіналом ≥ 85%',
+  },
+  pl: {
+    loadingModels: 'Ładowanie modeli…',
+    cameraPermission: 'Zezwól na dostęp do kamery',
+    galleryBtn: '📁 Galeria',
+    placeFace: 'Umieść twarz w konturze',
+    moveCloser: '🔍  Podejdź bliżej',
+    moveFurther: '↔️  Cofnij się',
+    moveRight: '→  W prawo',
+    moveLeft: '←  W lewo',
+    moveDown: '↓  W dół',
+    moveUp: '↑  W górę',
+    holdStraight: '📐  Trzymaj głowę prosto',
+    perfectHold: '✅  Świetnie! Trzymaj…',
+    step1: 'Rozpoznawanie twarzy',
+    step2: 'Walidacja zdjęcia',
+    step3: 'Kadrowanie 35×45 mm',
+    step4: 'Przetwarzanie AI',
+    step5: 'Weryfikacja tożsamości',
+    originalLbl: 'Oryginał',
+    resultLbl: 'Wynik',
+    checksLbl: 'Wymagania',
+    pdfBtn: '📄 PDF · 4 zdjęcia A4',
+    retakeBtn: '↩ Zrób ponownie',
+    downloadJpg: '⬇ Pobierz JPG · {mb} MB',
+    badgeAi: '✨ AI przetworzono',
+    errFileSize: 'Plik większy niż 20 MB — wybierz inne zdjęcie',
+    errLowRes: 'Rozdzielczość zbyt niska (min. 400×500 px)',
+    errNoFace: 'Nie wykryto twarzy. Spróbuj przy lepszym oświetleniu',
+    errMultipleFaces: 'Wykryto kilka twarzy — potrzebna tylko jedna osoba',
+    errFaceTooSmall: 'Twarz zbyt mała — powinna zajmować min. 15% kadru',
+    errEyesClosed: 'Oczy zamknięte lub zmrużone — szerzej otwórz oczy',
+    errHeadTilt: 'Głowa obrócona/przechylona — patrz prosto w kamerę',
+    chkFaceFound: 'Wykryto twarz',
+    chkAuto: 'Automatycznie',
+    chkFrame: 'Kadr 35×45 mm',
+    chkIcao: 'Standard ICAO (PL)',
+    chkBackground: 'Tło zastąpione',
+    chkBgDetail: 'Białe, równomierne',
+    chkRetouch: 'Delikatny retusz',
+    chkRetouchDetail: 'Bez zmiany rysów',
+    chkResolution: '{w}×{h} px',
+    chkResMin: 'Min. 684×883 ✓',
+    chkSize: '{mb} MB',
+    chkSizeOk: 'Maks. 2.5 MB ✓',
+    chkSizeFail: 'Przekroczono limit',
+    chkSimilarity: 'Podobieństwo do oryginału: {pct}%',
+    chkSimilarityOk: 'Twarz zachowana ≥ 85% ✓',
+    chkSimilarityFail: 'Uwaga: AI zmienił rysy twarzy',
+    warnSimilarity: 'AI zbyt mocno zmienił twarz — zalecamy ponowne zdjęcie lub kontakt z operatorem. Można pobrać.',
+    quotaExceeded: 'Dzienny limit AI wyczerpany, spróbuj później',
+    aiFailed: 'AI nie zadziałał — pokazuję wykadrowane zdjęcie bez obróbki',
+    procError: 'Błąd przetwarzania. Spróbuj ponownie',
+    linesBtn: '📐 Linie kadrowania',
+    linesOn: '📐 Ukryj linie',
+    pkPrefix: 'ID',
+    chk_MinResolution: 'Min. rozdzielczość źródła',
+    chk_ValidRecognition: 'Wykryto twarz',
+    chk_MoreThanOneFace: 'Tylko jedna twarz',
+    chk_MinFaceSize: 'Twarz ≥ 15% kadru',
+    chk_EyesOpen: 'Oczy otwarte',
+    chk_HeadPose: 'Głowa prosto (≤ 15°)',
+    chk_AiProcessed: 'AI przetworzono',
+    chk_PhotoRatio: 'Proporcje 35×45 mm',
+    chk_OutputResolution: 'Rozdzielczość wyniku ≥ 684×883',
+    chk_OutputSize: 'Rozmiar pliku ≤ 2.5 MB',
+    chk_IdentityPreserved: 'Podobieństwo do oryginału ≥ 85%',
+  },
+  en: {
+    loadingModels: 'Loading models…',
+    cameraPermission: 'Allow camera access',
+    galleryBtn: '📁 Gallery',
+    placeFace: 'Place face inside outline',
+    moveCloser: '🔍  Move closer',
+    moveFurther: '↔️  Move back',
+    moveRight: '→  Right',
+    moveLeft: '←  Left',
+    moveDown: '↓  Down',
+    moveUp: '↑  Up',
+    holdStraight: '📐  Keep head straight',
+    perfectHold: '✅  Perfect! Hold…',
+    step1: 'Face detection',
+    step2: 'Validation',
+    step3: 'Crop 35×45 mm',
+    step4: 'AI processing',
+    step5: 'Identity check',
+    originalLbl: 'Original',
+    resultLbl: 'Result',
+    checksLbl: 'Requirements',
+    pdfBtn: '📄 PDF · 4 photos A4',
+    retakeBtn: '↩ Retake',
+    downloadJpg: '⬇ Download JPG · {mb} MB',
+    badgeAi: '✨ AI processed',
+    errFileSize: 'File larger than 20 MB — pick another photo',
+    errLowRes: 'Resolution too low (min. 400×500 px)',
+    errNoFace: 'No face detected. Try better lighting',
+    errMultipleFaces: 'Multiple faces detected — only one person allowed',
+    errFaceTooSmall: 'Face too small — should be at least 15% of frame',
+    errEyesClosed: 'Eyes closed or squinting — open eyes wider',
+    errHeadTilt: 'Head tilted/turned — look straight into the camera',
+    chkFaceFound: 'Face detected',
+    chkAuto: 'Automatic',
+    chkFrame: 'Frame 35×45 mm',
+    chkIcao: 'Polish ICAO standard',
+    chkBackground: 'Background replaced',
+    chkBgDetail: 'White, uniform',
+    chkRetouch: 'Light retouch',
+    chkRetouchDetail: 'Features preserved',
+    chkResolution: '{w}×{h} px',
+    chkResMin: 'Min. 684×883 ✓',
+    chkSize: '{mb} MB',
+    chkSizeOk: 'Max. 2.5 MB ✓',
+    chkSizeFail: 'Limit exceeded',
+    chkSimilarity: 'Similarity to original: {pct}%',
+    chkSimilarityOk: 'Face preserved ≥ 85% ✓',
+    chkSimilarityFail: 'Warning: AI altered facial features',
+    warnSimilarity: 'AI altered the face too much — please retake or hand off to operator. You can still download.',
+    quotaExceeded: 'AI daily limit reached, try later',
+    aiFailed: 'AI failed — showing cropped photo without processing',
+    procError: 'Processing error. Please try again',
+    linesBtn: '📐 Crop guide lines',
+    linesOn: '📐 Hide lines',
+    pkPrefix: 'ID',
+    chk_MinResolution: 'Min. source resolution',
+    chk_ValidRecognition: 'Face recognized',
+    chk_MoreThanOneFace: 'Only one face',
+    chk_MinFaceSize: 'Face ≥ 15% of frame',
+    chk_EyesOpen: 'Eyes open',
+    chk_HeadPose: 'Head straight (≤ 15°)',
+    chk_AiProcessed: 'AI processing completed',
+    chk_PhotoRatio: '35×45 mm aspect',
+    chk_OutputResolution: 'Output resolution ≥ 684×883',
+    chk_OutputSize: 'File size ≤ 2.5 MB',
+    chk_IdentityPreserved: 'Similarity to original ≥ 85%',
+  }
+};
+
+const LANG = (() => {
+  const code = (tg.initDataUnsafe?.user?.language_code || navigator.language || 'en').toLowerCase();
+  if (code.startsWith('ru')) return 'ru';
+  if (code.startsWith('uk') || code.startsWith('ua')) return 'uk';
+  if (code.startsWith('pl')) return 'pl';
+  return 'en';
+})();
+const T = I18N[LANG];
+function t(key, params) {
+  let s = T[key] || I18N.en[key] || key;
+  if (params) for (const k in params) s = s.replace(`{${k}}`, params[k]);
+  return s;
+}
+function applyI18n() {
+  document.documentElement.lang = LANG;
+  document.title = LANG === 'pl' ? 'Zdjęcie biometryczne'
+                 : LANG === 'uk' ? 'Біометричне фото'
+                 : LANG === 'ru' ? 'Биометрическое фото' : 'Biometric photo';
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+}
+
+tg.MainButton.setText(t('downloadJpg', { mb: '0.0' }));
+
+// ── Document profiles (modular — easy to add PL passport, UZ passport, etc.) ──
+const PROFILES = {
+  PL_RESIDENCE: {
+    id: 'PL_RESIDENCE',
+    countryCode: 'PL',
+    documentName: 'Zezwolenie na pobyt',
+    dimensions: { wMm: 35, hMm: 45 },
+    output: { w: 684, h: 883 },          // px (≥ ICAO minimum)
+    background: '#fcfcfc',                // off-white per PhotoAid / PL ICAO practice
+    maxFileMB: 2.5,
+    photosPerPrintout: 4,
+    minInputW: 400, minInputH: 500,
+    maxInputBytes: 20 * 1024 * 1024,
+    minFaceFrameRatio: 0.15,
+    minEar: 0.18,
+    maxHeadTiltDeg: 15,
+    minFaceSimilarity: 0.85,
+  },
+};
+const ACTIVE_PROFILE = PROFILES.PL_RESIDENCE;
+
+// ── Constants ────────────────────────────────────────────────
 const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
-const OUT_W = 684, OUT_H = 883, ASPECT = 35/45, MAX_MB = 2.5;
+const OUT_W = ACTIVE_PROFILE.output.w, OUT_H = ACTIVE_PROFILE.output.h;
+const ASPECT = ACTIVE_PROFILE.dimensions.wMm / ACTIVE_PROFILE.dimensions.hMm;
+const MAX_MB = ACTIVE_PROFILE.maxFileMB;
 const RING_C = 2 * Math.PI * 32;
 const NEED_GOOD = 18;
 
@@ -254,24 +572,29 @@ const SUPA_URL  = 'https://bltbuptzsswaislqagwe.supabase.co';
 const SUPA_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsdGJ1cHR6c3N3YWlzbHFhZ3dlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNzU1OTQsImV4cCI6MjA4ODY1MTU5NH0.OQk3TwVSaepYdQFAOXIa3GFhu_jvCgZ7LDi1rqrFgN0';
 const FN_URL    = `${SUPA_URL}/functions/v1/process-photo`;
 
-let ready = false, segment = null, stream = null;
+let ready = false, stream = null;
 let rafId = null, detecting = false, goodFrames = 0;
 let capturedImg = null, capturedDet = null;
-let lastLiveDet = null;       // most recent good detection from live video
-let vOff = 0, fRatio = 0.75, jpgQ = 0.92;
+let lastLiveDet = null;
+let originalDescriptor = null;        // face descriptor of source (for similarity)
+let processedDescriptor = null;       // descriptor after AI
+let similarityScore = null;           // cosine similarity 0..1
+let lastResultBlob = null, lastResultMb = 0;
+let preChecks = [];                   // pre-AI taxonomy items
+let serverChecks = [];                // taxonomy items returned by Edge Function
+let shortPhotoKey = null;             // 10-hex token for support
+let showGuideLines = false;
 
 const $ = id => document.getElementById(id);
 
 // ── Init ──────────────────────────────────────────────────────
 async function init() {
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-
-  segment = new SelfieSegmentation({
-    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}`
-  });
-  segment.setOptions({ modelSelection: 1 });
-
+  applyI18n();
+  await Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+  ]);
   ready = true;
   $('loadOverlay').classList.add('hidden');
   await startCamera();
@@ -285,13 +608,13 @@ async function startCamera() {
     });
     $('video').srcObject = stream;
     await new Promise(r => $('video').onloadedmetadata = r);
-    $('hintText').textContent = 'Поместите лицо в овал';
+    $('hintText').textContent = t('placeFace');
     startLoop();
   } catch {
     $('video').style.display = 'none';
     $('guideCanvas').style.display = 'none';
     $('hintIcon').textContent = '📁';
-    $('hintText').textContent = 'Нажмите «Галерея» для выбора фото';
+    $('hintText').textContent = t('galleryBtn');
   }
 }
 
@@ -300,57 +623,34 @@ function stopCamera() {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 }
 
-// ── Silhouette geometry & path ────────────────────────────────
+// ── Silhouette (camera guide) ─────────────────────────────────
 function silGeo(vw, vh) {
   return {
     cx: vw / 2,
-    headCy: vh * 0.34,        // center y of head ellipse
-    headW:  vw * 0.27,        // half-width of head
-    headH:  vh * 0.21,        // half-height of head
-    neckW:  vw * 0.10,        // half-width of neck
-    neckBy: vh * 0.60,        // y where neck meets shoulders
-    shW:    vw * 0.46,        // half-width of shoulders
-    shY:    vh * 0.68,        // y of shoulder peak
-    botY:   vh * 1.10         // off-screen bottom
+    headCy: vh * 0.34,
+    headW:  vw * 0.27,
+    headH:  vh * 0.21,
+    neckW:  vw * 0.10,
+    neckBy: vh * 0.60,
+    shW:    vw * 0.46,
+    shY:    vh * 0.68,
+    botY:   vh * 1.10
   };
 }
-
 function silPath(g) {
   const p = new Path2D();
-  // Head ellipse
   p.moveTo(g.cx - g.headW, g.headCy);
   p.ellipse(g.cx, g.headCy, g.headW, g.headH, 0, Math.PI, 0, false);
-  // Right: head bottom → neck → shoulder
-  p.bezierCurveTo(
-    g.cx + g.headW * 0.92, g.headCy + g.headH * 1.25,
-    g.cx + g.neckW * 1.4,  g.headCy + g.headH * 1.55,
-    g.cx + g.neckW,        g.neckBy
-  );
-  p.bezierCurveTo(
-    g.cx + g.neckW * 1.9,  g.neckBy + (g.shY - g.neckBy) * 0.35,
-    g.cx + g.shW * 0.72,   g.shY - (g.shY - g.neckBy) * 0.20,
-    g.cx + g.shW,          g.shY
-  );
-  // Down right + bottom + up left
-  p.lineTo(g.cx + g.shW, g.botY);
-  p.lineTo(g.cx - g.shW, g.botY);
-  p.lineTo(g.cx - g.shW, g.shY);
-  // Left: shoulder → neck → head
-  p.bezierCurveTo(
-    g.cx - g.shW * 0.72,   g.shY - (g.shY - g.neckBy) * 0.20,
-    g.cx - g.neckW * 1.9,  g.neckBy + (g.shY - g.neckBy) * 0.35,
-    g.cx - g.neckW,        g.neckBy
-  );
-  p.bezierCurveTo(
-    g.cx - g.neckW * 1.4,  g.headCy + g.headH * 1.55,
-    g.cx - g.headW * 0.92, g.headCy + g.headH * 1.25,
-    g.cx - g.headW,        g.headCy
-  );
+  p.bezierCurveTo(g.cx + g.headW * 0.92, g.headCy + g.headH * 1.25, g.cx + g.neckW * 1.4, g.headCy + g.headH * 1.55, g.cx + g.neckW, g.neckBy);
+  p.bezierCurveTo(g.cx + g.neckW * 1.9, g.neckBy + (g.shY - g.neckBy) * 0.35, g.cx + g.shW * 0.72, g.shY - (g.shY - g.neckBy) * 0.20, g.cx + g.shW, g.shY);
+  p.lineTo(g.cx + g.shW, g.botY); p.lineTo(g.cx - g.shW, g.botY); p.lineTo(g.cx - g.shW, g.shY);
+  p.bezierCurveTo(g.cx - g.shW * 0.72, g.shY - (g.shY - g.neckBy) * 0.20, g.cx - g.neckW * 1.9, g.neckBy + (g.shY - g.neckBy) * 0.35, g.cx - g.neckW, g.neckBy);
+  p.bezierCurveTo(g.cx - g.neckW * 1.4, g.headCy + g.headH * 1.55, g.cx - g.headW * 0.92, g.headCy + g.headH * 1.25, g.cx - g.headW, g.headCy);
   p.closePath();
   return p;
 }
 
-// ── Detection loop ────────────────────────────────────────────
+// ── Detection loop (live preview) ─────────────────────────────
 function startLoop() {
   const video  = $('video');
   const canvas = $('guideCanvas');
@@ -367,7 +667,6 @@ function startLoop() {
     const g = silGeo(vw, vh);
     const path = silPath(g);
 
-    // Vignette outside silhouette
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.62)';
     ctx.fillRect(0, 0, vw, vh);
@@ -375,7 +674,6 @@ function startLoop() {
     ctx.fill(path);
     ctx.restore();
 
-    // Face detection
     detecting = true;
     let det = null;
     try {
@@ -385,17 +683,13 @@ function startLoop() {
     } catch { /* ignore */ }
     detecting = false;
 
-    // Evaluate position vs head ellipse
-    let status = 'none', hint = '👤  Встаньте в контур', icon = '👤';
-
+    let status = 'none', hint = t('placeFace'), icon = '👤';
     if (det) {
       const b  = det.detection.box;
       const fcx = b.x + b.width/2, fcy = b.y + b.height/2;
-      // face height vs head ellipse height (face = forehead→chin ≈ 80% of head)
       const sr  = b.height / (g.headH * 2);
       const off = Math.abs(fcx - g.cx) / g.headW;
       const offY = Math.abs(fcy - g.headCy) / g.headH;
-
       const lm   = det.landmarks;
       const avgY = pts => pts.reduce((s,p) => s+p.y,0) / pts.length;
       const avgX = pts => pts.reduce((s,p) => s+p.x,0) / pts.length;
@@ -404,15 +698,14 @@ function startLoop() {
         avgX(lm.getRightEye()) - avgX(lm.getLeftEye())
       ) * 180 / Math.PI);
 
-      if      (sr < 0.55)  { status='far';   hint='🔍  Подойдите ближе';            icon='🔍'; }
-      else if (sr > 0.95)  { status='close'; hint='↔️  Отойдите дальше';             icon='↔️'; }
-      else if (off  > 0.4) { status='side';  hint=(fcx<g.cx)?'→  Вправо':'←  Влево'; icon='↔️'; }
-      else if (offY > 0.55){ status='vert';  hint=(fcy<g.headCy)?'↓  Вниз':'↑  Вверх'; icon='↕️'; }
-      else if (ang > 5)    { status='tilt';  hint='📐  Держите голову ровно';        icon='📐'; }
-      else                 { status='ok';    hint='✅  Хорошо! Держите…';            icon='✅'; lastLiveDet = det; }
+      if      (sr < 0.55)  { status='far';   hint=t('moveCloser');    icon='🔍'; }
+      else if (sr > 0.95)  { status='close'; hint=t('moveFurther');   icon='↔️'; }
+      else if (off  > 0.4) { status='side';  hint=(fcx<g.cx)?t('moveRight'):t('moveLeft'); icon='↔️'; }
+      else if (offY > 0.55){ status='vert';  hint=(fcy<g.headCy)?t('moveDown'):t('moveUp'); icon='↕️'; }
+      else if (ang > 5)    { status='tilt';  hint=t('holdStraight');  icon='📐'; }
+      else                 { status='ok';    hint=t('perfectHold');   icon='✅'; lastLiveDet = det; }
     }
 
-    // Countdown / auto-capture
     if (status === 'ok') {
       goodFrames = Math.min(goodFrames + 1, NEED_GOOD);
       if (goodFrames >= NEED_GOOD) { capture(); return; }
@@ -424,112 +717,270 @@ function startLoop() {
     ring.style.strokeDashoffset = RING_C * (1 - goodFrames/NEED_GOOD);
     ring.style.opacity = status === 'ok' ? '1' : '0';
 
-    // Silhouette outline
     const clr = { none:'rgba(255,255,255,.55)', far:'#f2994a', close:'#f2994a',
                   side:'#f2994a', vert:'#f2994a', tilt:'#f2994a', ok:'#27ae60' }[status];
     ctx.save();
-    ctx.strokeStyle = clr;
-    ctx.lineWidth = 3.5;
-    ctx.setLineDash([14, 7]);
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 8;
+    ctx.strokeStyle = clr; ctx.lineWidth = 3.5; ctx.setLineDash([14, 7]);
+    ctx.lineJoin = 'round'; ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 8;
     ctx.stroke(path);
     ctx.restore();
 
     $('hintIcon').textContent = icon;
     $('hintText').textContent = hint;
   }
-
   rafId = requestAnimationFrame(tick);
 }
 
 // ── Capture ───────────────────────────────────────────────────
 async function capture() {
-  // Cancel detection loop but keep stream alive while we grab the frame
   if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-
   const video = $('video');
   const vw = video.videoWidth || 1280, vh = video.videoHeight || 1280;
   const snap = mk(vw, vh);
-  // Capture pixels FIRST while video is still playing
   snap.getContext('2d').drawImage(video, 0, 0);
-
-  // Now safe to stop the camera
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 
   showScreen('screenProcessing');
   await processSnap(snap);
 }
 
-// ── Process ───────────────────────────────────────────────────
+// ── Validation taxonomy (PhotoAid-style) ─────────────────────
+// Each check: { label, test (i18n), isValid, canBeFixed, isMandatory }.
+// `canBeFixed` = AI/post-processing can correct it (no retake needed).
+// `isMandatory` = blocks delivery when invalid.
+function mkCheck(label, isValid, opts = {}) {
+  return {
+    label,
+    test: t('chk_' + label) || label,
+    isValid: !!isValid,
+    canBeFixed: !!opts.canBeFixed,
+    isMandatory: opts.isMandatory !== false,
+    detail: opts.detail || '',
+  };
+}
+
+// Compute Eye Aspect Ratio from 6 landmark points.
+function eyeAspectRatio(eye) {
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  return (dist(eye[1], eye[5]) + dist(eye[2], eye[4])) / (2 * dist(eye[0], eye[3]));
+}
+
+// Approximate head pose from landmarks.
+// roll: angle between eyes vs horizontal.
+// yaw: asymmetry of nose tip relative to face midline (between eye centers).
+// pitch: vertical position of nose tip relative to (eye-mouth) midpoint.
+function headPose(lm) {
+  const le = lm.getLeftEye(), re = lm.getRightEye();
+  const lEye = { x: le.reduce((s,p)=>s+p.x,0)/le.length, y: le.reduce((s,p)=>s+p.y,0)/le.length };
+  const rEye = { x: re.reduce((s,p)=>s+p.x,0)/re.length, y: re.reduce((s,p)=>s+p.y,0)/re.length };
+  const roll = Math.atan2(rEye.y - lEye.y, rEye.x - lEye.x) * 180 / Math.PI;
+
+  const nose = lm.getNose();
+  const noseTip = nose[nose.length - 1];           // tip
+  const eyeMidX = (lEye.x + rEye.x) / 2;
+  const eyeMidY = (lEye.y + rEye.y) / 2;
+  const eyeDist = Math.hypot(rEye.x - lEye.x, rEye.y - lEye.y) || 1;
+  // Yaw: nose offset from eye midline horizontally, normalised by eye distance.
+  // Empirical scale: ~30° for offset = 0.5 * eyeDist.
+  const yaw = ((noseTip.x - eyeMidX) / eyeDist) * 60;
+
+  const mouth = lm.getMouth();
+  const mouthMidY = mouth.reduce((s,p)=>s+p.y,0) / mouth.length;
+  // Pitch: nose vs (eye-mouth) midpoint, normalised by face height.
+  const faceH = mouthMidY - eyeMidY || 1;
+  const pitch = ((noseTip.y - (eyeMidY + faceH * 0.55)) / faceH) * 80;
+
+  return { roll, yaw, pitch };
+}
+
+// Pre-AI checks. Returns full taxonomy regardless of pass/fail (PhotoAid-style),
+// so the result screen can show every gate with its status.
+function runPreChecks(snap, allDetections, single) {
+  const checks = [];
+  const P = ACTIVE_PROFILE;
+
+  // Resolution
+  checks.push(mkCheck('MinResolution',
+    snap.width >= P.minInputW && snap.height >= P.minInputH,
+    { detail: `${snap.width}×${snap.height}` }));
+
+  // Face recognized at all
+  const faceCount = (allDetections || []).length || (single ? 1 : 0);
+  checks.push(mkCheck('ValidRecognition', faceCount >= 1));
+
+  // Exactly one face
+  checks.push(mkCheck('MoreThanOneFace', faceCount === 1, { detail: `${faceCount}` }));
+
+  // Face size in frame
+  if (single) {
+    const b = single.detection.box;
+    const ratio = (b.width * b.height) / (snap.width * snap.height);
+    checks.push(mkCheck('MinFaceSize', ratio >= P.minFaceFrameRatio,
+      { detail: `${(ratio * 100).toFixed(0)}%` }));
+  } else {
+    checks.push(mkCheck('MinFaceSize', false));
+  }
+
+  // Eyes open (EAR)
+  if (single?.landmarks) {
+    const earL = eyeAspectRatio(single.landmarks.getLeftEye());
+    const earR = eyeAspectRatio(single.landmarks.getRightEye());
+    checks.push(mkCheck('EyesOpen', earL >= P.minEar && earR >= P.minEar,
+      { detail: `EAR ${earL.toFixed(2)}/${earR.toFixed(2)}` }));
+  } else {
+    checks.push(mkCheck('EyesOpen', false));
+  }
+
+  // Head pose
+  if (single?.landmarks) {
+    const { roll, yaw, pitch } = headPose(single.landmarks);
+    const ok = Math.abs(roll) <= P.maxHeadTiltDeg
+            && Math.abs(yaw)  <= P.maxHeadTiltDeg
+            && Math.abs(pitch) <= P.maxHeadTiltDeg;
+    checks.push(mkCheck('HeadPose', ok,
+      { detail: `r${roll.toFixed(0)}° y${yaw.toFixed(0)}° p${pitch.toFixed(0)}°` }));
+  } else {
+    checks.push(mkCheck('HeadPose', false));
+  }
+
+  return checks;
+}
+
+// First mandatory failure → user-facing error key for retake. null if all pass.
+function firstMandatoryFailure(checks) {
+  const failed = checks.find(c => c.isMandatory && !c.isValid);
+  if (!failed) return null;
+  // Map check label to i18n error key
+  const map = {
+    MinResolution:    'errLowRes',
+    ValidRecognition: 'errNoFace',
+    MoreThanOneFace:  'errMultipleFaces',
+    MinFaceSize:      'errFaceTooSmall',
+    EyesOpen:         'errEyesClosed',
+    HeadPose:         'errHeadTilt',
+  };
+  return map[failed.label] || 'procError';
+}
+
+// ── Process pipeline ─────────────────────────────────────────
 async function processSnap(snap) {
-  const ids = ['ps1','ps2','ps3','ps4'];
+  const ids = ['ps1','ps2','ps3','ps4','ps5'];
   const step = n => ids.forEach((id,i) =>
     $(id).className = 'pstep' + (i<n?' done':i===n?' active':''));
 
   try {
+    // 1) Face detection (multi for count gate, single for landmarks/descriptor)
     step(0);
-    // 1) Если есть детекция из live-цикла (автозахват) — используем её,
-    //    координаты совпадают с снимком т.к. снимок берётся из того же видео
-    let det = lastLiveDet;
+    let allDet = [];
+    let singleDet = lastLiveDet;
 
-    // 2) Иначе (ручной снимок / галерея) — пробуем несколько размеров
-    if (!det) {
-      for (const inputSize of [512, 416, 320, 608, 224]) {
-        try {
-          det = await withTimeout(
-            faceapi
-              .detectSingleFace(snap, new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold:.2 }))
-              .withFaceLandmarks(),
-            5000, `detect@${inputSize}`
-          );
-          if (det) break;
-        } catch (e) {
-          console.warn(`Detection failed @ inputSize=${inputSize}:`, e);
-        }
+    // Always detect-all for count gate (live det only gives one).
+    for (const inputSize of [512, 416, 320, 608, 224]) {
+      try {
+        allDet = await withTimeout(
+          faceapi
+            .detectAllFaces(snap, new faceapi.TinyFaceDetectorOptions({ inputSize, scoreThreshold:.3 }))
+            .withFaceLandmarks().withFaceDescriptors(),
+          5000, `detect@${inputSize}`
+        );
+        if (allDet && allDet.length) break;
+      } catch (e) {
+        console.warn(`Detection failed @ inputSize=${inputSize}:`, e);
       }
     }
 
-    if (!det) {
-      safeAlert('Лицо не распознано. Попробуйте при лучшем освещении.');
+    if (allDet && allDet.length === 1) {
+      singleDet = allDet[0];
+    } else if (singleDet && (!allDet || !allDet.length)) {
+      // Live det had a face but multi-detect missed it — re-run on snap with descriptor.
+      try {
+        singleDet = await faceapi
+          .detectSingleFace(snap, new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:.2 }))
+          .withFaceLandmarks().withFaceDescriptor();
+        if (singleDet) allDet = [singleDet];
+      } catch {}
+    }
+
+    await wait(150);
+
+    // 2) Validation per ТЗ §2.2 + PhotoAid-style taxonomy
+    step(1);
+    preChecks = runPreChecks(snap, allDet, singleDet);
+    const errKey = firstMandatoryFailure(preChecks);
+    if (errKey) {
+      safeAlert(t(errKey));
       resetToCamera();
       return;
     }
-    capturedDet = det;
+    capturedDet = singleDet;
+    originalDescriptor = singleDet.descriptor || null;
     lastLiveDet = null;
     await wait(150);
 
-    // ── 1. Локальное кадрирование 35×45 мм ─────────────────
-    step(1);
-    const cropped = makeCrop(snap, det);
+    // 3) Local crop 35×45 mm
+    step(2);
+    const cropped = makeCrop(snap, singleDet);
     await wait(150);
 
-    // ── 2. AI-обработка (Nano Banana через Supabase) ──────
-    step(2);
-    let aiImg;
+    // 4) AI processing via Supabase Edge Function
+    step(3);
+    let aiImg, aiOk = true;
+    serverChecks = []; shortPhotoKey = null;
     try {
-      aiImg = await withTimeout(processWithAI(cropped), 60000, 'AI processing');
+      const r = await withTimeout(processWithAI(cropped), 90000, 'AI processing');
+      aiImg = r.img;
+      shortPhotoKey = r.shortPhotoKey;
+      serverChecks = (r.serverChecks || []).map(c =>
+        ({ ...c, test: t('chk_' + c.label) || c.label })
+      );
     } catch (e) {
       console.error('AI processing failed:', e);
-      safeAlert(e.quota ? 'Дневной лимит AI исчерпан, попробуйте позже' : 'AI не сработал, показываю фото без обработки');
-      aiImg = await c2i(cropped);  // fallback to plain crop
+      safeAlert(e.quota ? t('quotaExceeded') : t('aiFailed'));
+      aiImg = await c2i(cropped);
+      aiOk = false;
+      serverChecks = [mkCheck('AiProcessed', false, { isMandatory: true })];
     }
     await wait(150);
 
-    // ── 3. Готово ─────────────────────────────────────────
-    step(3);
-    capturedImg = aiImg;
-    await wait(200);
+    // 5) Identity check (face similarity)
+    step(4);
+    similarityScore = null;
+    processedDescriptor = null;
+    if (aiOk && originalDescriptor) {
+      try {
+        const aiCanvas = mk(aiImg.naturalWidth || aiImg.width, aiImg.naturalHeight || aiImg.height);
+        aiCanvas.getContext('2d').drawImage(aiImg, 0, 0);
+        const procDet = await withTimeout(
+          faceapi
+            .detectSingleFace(aiCanvas, new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:.2 }))
+            .withFaceLandmarks().withFaceDescriptor(),
+          7000, 'similarity-detect'
+        );
+        if (procDet && procDet.descriptor) {
+          processedDescriptor = procDet.descriptor;
+          similarityScore = cosineSimilarity(originalDescriptor, procDet.descriptor);
+        }
+      } catch (e) {
+        console.warn('similarity check failed:', e);
+      }
+    }
+    await wait(150);
 
+    capturedImg = aiImg;
     $('origThumb').src = snap.toDataURL('image/jpeg', 0.6);
-    resetSliders();
     showScreen('screenResult');
-    render();
+    await render();
     tg.MainButton.show();
+
+    // Notify bot if similarity gate failed (admin handoff per ТЗ §4)
+    if (similarityScore !== null && similarityScore < ACTIVE_PROFILE.minFaceSimilarity) {
+      try {
+        tg.sendData(JSON.stringify({ event: 'gate_failed', reason: 'low_similarity', score: similarityScore }));
+      } catch {}
+    }
   } catch (e) {
     console.error('processSnap error:', e);
-    safeAlert('Ошибка обработки. Попробуйте ещё раз.');
+    safeAlert(t('procError'));
     resetToCamera();
   }
 }
@@ -541,8 +992,6 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
-// Telegram tg.showAlert принимает строку до ~256 символов без \n
-// и падает с WebAppPopupParamInvalid если что-то не так — оборачиваем
 function safeAlert(msg) {
   try {
     const clean = String(msg).replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -552,18 +1001,26 @@ function safeAlert(msg) {
   }
 }
 
-// ── Local crop to 35×45 mm ────────────────────────────────────
+// face-api.js descriptors are L2-normalized → cos = 1 - euclidean²/2
+function cosineSimilarity(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+}
+
+// ── Local crop to 35×45 mm ───────────────────────────────────
 function makeCrop(src, det) {
   const b   = det.detection.box;
+  const fRatio = 0.75;          // face ≈ 75% of frame height
   const pH  = b.height / fRatio;
   const pW  = pH * ASPECT;
   const cx  = b.x + b.width / 2;
   const cropX = cx - pW / 2;
-  const cropY = b.y - pH * 0.16 - vOff;
+  const cropY = b.y - pH * 0.16;
 
   const out = mk(OUT_W, OUT_H);
   const ctx = out.getContext('2d');
-  ctx.fillStyle = '#f0f0ee';
+  ctx.fillStyle = ACTIVE_PROFILE.background;
   ctx.fillRect(0, 0, OUT_W, OUT_H);
 
   const sx = Math.max(0, cropX);
@@ -577,7 +1034,7 @@ function makeCrop(src, det) {
   return out;
 }
 
-// ── AI-обработка через Supabase Edge Function (Nano Banana) ──
+// ── AI via Supabase Edge Function ────────────────────────────
 async function processWithAI(canvas) {
   const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
   const userId  = tg.initDataUnsafe?.user?.id?.toString() || 'anonymous';
@@ -594,8 +1051,8 @@ async function processWithAI(canvas) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    if (err.code === 'QUOTA_EXCEEDED') {
-      const e = new Error('Дневной лимит AI исчерпан, попробуйте завтра');
+    if (err.code === 'QUOTA_EXCEEDED' || res.status === 429) {
+      const e = new Error(t('quotaExceeded'));
       e.quota = true;
       throw e;
     }
@@ -604,133 +1061,179 @@ async function processWithAI(canvas) {
   const data = await res.json();
   if (!data.image) throw new Error('No image in response');
 
-  return await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload  = () => resolve(img);
-    img.onerror = () => reject(new Error('Failed to load AI image'));
-    img.src = data.image;
+  const img = await new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload  = () => resolve(im);
+    im.onerror = () => reject(new Error('Failed to load AI image'));
+    im.src = data.image;
   });
+  return {
+    img,
+    shortPhotoKey: data.shortPhotoKey || null,
+    serverChecks: Array.isArray(data.serverChecks) ? data.serverChecks : [],
+  };
 }
 
-// ── Background removal (legacy fallback, no longer used) ─────
-function removeBg(src) {
-  return new Promise(resolve => {
-    const out = mk(src.width, src.height);
-    const ctx = out.getContext('2d');
-    let done = false;
-
-    const fallback = () => {
-      if (done) return; done = true;
-      ctx.fillStyle = '#f0f0ee';
-      ctx.fillRect(0, 0, src.width, src.height);
-      ctx.drawImage(src, 0, 0);
-      resolve(out);
-    };
-
-    // Hard timeout: if MediaPipe hangs, just use original on white bg
-    const timer = setTimeout(fallback, 7000);
-
-    try {
-      segment.onResults(({ segmentationMask }) => {
-        if (done) return; done = true;
-        clearTimeout(timer);
-
-        ctx.fillStyle = '#f0f0ee';
-        ctx.fillRect(0, 0, out.width, out.height);
-
-        const tmp = mk(src.width, src.height);
-        const tc  = tmp.getContext('2d');
-        tc.drawImage(src, 0, 0);
-        tc.globalCompositeOperation = 'destination-in';
-        tc.drawImage(segmentationMask, 0, 0, src.width, src.height);
-
-        ctx.drawImage(tmp, 0, 0);
-        resolve(out);
-      });
-
-      segment.send({ image: src }).catch(fallback);
-    } catch (e) {
-      clearTimeout(timer);
-      fallback();
-    }
-  });
-}
-
-// ── Skin retouch ─────────────────────────────────────────────
-function retouch(src) {
-  const w = src.width, h = src.height;
-  const out = mk(w, h), octx = out.getContext('2d');
-
-  // Create blurred copy
-  octx.filter = 'blur(1.5px)'; octx.drawImage(src, 0, 0); octx.filter = 'none';
-  const blur = octx.getImageData(0, 0, w, h).data;
-
-  octx.drawImage(src, 0, 0);
-  const img = octx.getImageData(0, 0, w, h), d = img.data;
-
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i], g = d[i+1], b = d[i+2], a = d[i+3];
-    if (a < 20) continue;
-    const skin = r>80 && g>50 && b>30 && r>g && r>b && (r-Math.min(g,b))>18 && r<252;
-    if (skin) {
-      d[i]   = Math.round(r*.60 + blur[i]  *.40);
-      d[i+1] = Math.round(g*.60 + blur[i+1]*.40);
-      d[i+2] = Math.round(b*.60 + blur[i+2]*.40);
-    }
+// ── Iterative JPG compression to fit MAX_MB ──────────────────
+async function compressToTarget(canvas) {
+  for (let q = 95; q >= 70; q -= 5) {
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', q / 100));
+    if (!blob) continue;
+    const mb = blob.size / 1024 / 1024;
+    if (mb <= MAX_MB || q === 70) return { blob, mb, quality: q };
   }
-  octx.putImageData(img, 0, 0);
-  return out;
+  // Should not reach here, but return last attempt.
+  const fallback = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.7));
+  return { blob: fallback, mb: fallback.size / 1024 / 1024, quality: 70 };
 }
 
-// ── Render result ─────────────────────────────────────────────
-function render() {
-  if (!capturedImg) return;
-  drawResult(); validate();
-}
-
+// Draw the AI image (or cropped fallback) onto resultCanvas, optionally with guide lines.
 function drawResult() {
   const canvas = $('resultCanvas'), ctx = canvas.getContext('2d');
   canvas.width = OUT_W; canvas.height = OUT_H;
-  ctx.fillStyle = '#f0f0ee'; ctx.fillRect(0, 0, OUT_W, OUT_H);
-  // capturedImg уже 684×883 после AI-обработки
-  ctx.drawImage(capturedImg, 0, 0, OUT_W, OUT_H);
+  ctx.fillStyle = ACTIVE_PROFILE.background;
+  ctx.fillRect(0, 0, OUT_W, OUT_H);
+  if (capturedImg) ctx.drawImage(capturedImg, 0, 0, OUT_W, OUT_H);
+  if (showGuideLines) drawGuideLines(ctx);
+}
+
+// PhotoAid-style preview-with-lines: top-of-head, eye line, chin, shoulder line.
+function drawGuideLines(ctx) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(47,128,237,.85)';
+  ctx.fillStyle   = 'rgba(47,128,237,.85)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.font = 'bold 11px -apple-system, system-ui, sans-serif';
+  // Approximate ICAO/PL biometric guides for a 35×45 portrait with face 70–80% height.
+  const lines = [
+    { y: 0.10, label: 'top of head' },
+    { y: 0.40, label: 'eye line' },
+    { y: 0.78, label: 'chin' },
+    { y: 0.92, label: 'shoulders' },
+  ];
+  for (const ln of lines) {
+    const y = Math.round(OUT_H * ln.y);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(OUT_W, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillText(ln.label, 8, y - 4);
+    ctx.setLineDash([6, 4]);
+  }
+  ctx.restore();
+}
+
+// ── Render result ────────────────────────────────────────────
+async function render() {
+  drawResult();
 
   const badge = $('faceBadge');
-  badge.textContent = '✨ AI обработка';
+  badge.textContent = t('badgeAi');
   badge.style.background = 'rgba(39,174,96,.85)';
+
+  // Compress to ≤ 2.5 MB
+  const canvas = $('resultCanvas');
+  const { blob, mb } = await compressToTarget(canvas);
+  lastResultBlob = blob; lastResultMb = mb;
+
+  // Similarity warning banner
+  const banner = $('warnBanner');
+  if (similarityScore !== null && similarityScore < ACTIVE_PROFILE.minFaceSimilarity) {
+    banner.textContent = t('warnSimilarity');
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+
+  renderChecks(mb);
+  tg.MainButton.setText(t('downloadJpg', { mb: mb.toFixed(2) }));
+
+  // Short photo key for support
+  $('pkLine').textContent = shortPhotoKey ? `${t('pkPrefix')} · ${shortPhotoKey}` : '';
 }
 
-function validate() {
-  $('resultCanvas').toBlob(blob => {
-    const mb = blob.size/1024/1024, mbOk = mb<=MAX_MB;
-    $('checks').innerHTML = [
-      { ok:true, l:'Лицо обнаружено',          d:'Автоматически' },
-      { ok:true, l:'Кадр 35×45 мм',            d:'ICAO раскладка' },
-      { ok:true, l:'Фон заменён',              d:'AI · светлый ровный' },
-      { ok:true, l:'Ретушь кожи',              d:'AI · профессиональная' },
-      { ok:true, l:`${OUT_W}×${OUT_H} px`,     d:'Мин. 684×883 ✓' },
-      { ok:mbOk, l:`${mb.toFixed(2)} МБ`,      d:mbOk?'Макс. 2.5 МБ ✓':'Снизьте JPG' },
-    ].map(i=>`<div class="check-item"><span>${i.ok?'✅':'⚠️'}</span>
-      <div><div class="ci-lbl">${i.l}</div><div class="ci-det">${i.d}</div></div></div>`).join('');
-    tg.MainButton.setText(`⬇ Скачать JPG · ${mb.toFixed(2)} МБ`);
-  }, 'image/jpeg', jpgQ);
+// Combine pre-AI + server + post-AI checks into one taxonomy list and render.
+function buildFullTaxonomy(mb) {
+  const P = ACTIVE_PROFILE;
+  const post = [];
+
+  post.push(mkCheck('PhotoRatio', true, { canBeFixed: true }));
+  post.push(mkCheck('OutputResolution', OUT_W >= 684 && OUT_H >= 883,
+    { canBeFixed: true, detail: `${OUT_W}×${OUT_H} px` }));
+  post.push(mkCheck('OutputSize', mb <= MAX_MB,
+    { canBeFixed: true, detail: `${mb.toFixed(2)} MB` }));
+
+  if (similarityScore !== null) {
+    const pct = Math.round(similarityScore * 100);
+    post.push(mkCheck('IdentityPreserved',
+      similarityScore >= P.minFaceSimilarity,
+      { canBeFixed: false, detail: `${pct}%` }));
+  }
+
+  // Order: pre (input) → server (AI) → post (output)
+  return [...preChecks, ...serverChecks, ...post];
 }
 
-// ── Controls ──────────────────────────────────────────────────
-$('vPos').addEventListener('input', function() {
-  vOff=+this.value; $('vPosLbl').textContent=vOff>0?'+'+vOff:vOff; render();
-});
-$('faceScale').addEventListener('input', function() {
-  fRatio=+this.value/100; $('scaleLbl').textContent=this.value+'%'; render();
-});
-$('jpgQual').addEventListener('input', function() {
-  jpgQ=+this.value/100; $('qualLbl').textContent=this.value+'%'; render();
-});
+function renderChecks(mb) {
+  const items = buildFullTaxonomy(mb);
+  $('checks').innerHTML = items.map(i => {
+    const icon = i.isValid ? '✅' : (i.isMandatory ? '⚠️' : 'ℹ️');
+    const lbl  = i.test || i.label;
+    const det  = i.detail || (i.isValid ? '' : (i.canBeFixed ? '' : ''));
+    return `<div class="check-item"><span>${icon}</span>
+      <div><div class="ci-lbl">${escapeHtml(lbl)}</div>
+      ${det ? `<div class="ci-det">${escapeHtml(det)}</div>` : ''}</div></div>`;
+  }).join('');
+}
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ── A4 print sheet (2×2 grid of 35×45 mm) ────────────────────
+async function generateA4Pdf() {
+  if (!capturedImg) return;
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+
+  // Compose 4 photos centered, gap 5 mm, photo 35×45 mm.
+  const PHOTO_W = 35, PHOTO_H = 45, GAP = 5;
+  const totalW = PHOTO_W * 2 + GAP;
+  const totalH = PHOTO_H * 2 + GAP;
+  const startX = (210 - totalW) / 2;
+  const startY = (297 - totalH) / 2;
+
+  // Use a high-quality JPEG (no compression for print).
+  const canvas = $('resultCanvas');
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 2; col++) {
+      const x = startX + col * (PHOTO_W + GAP);
+      const y = startY + row * (PHOTO_H + GAP);
+      pdf.addImage(dataUrl, 'JPEG', x, y, PHOTO_W, PHOTO_H);
+      // Thin cut-line border
+      pdf.setLineWidth(0.1);
+      pdf.setDrawColor(180, 180, 180);
+      pdf.rect(x, y, PHOTO_W, PHOTO_H);
+    }
+  }
+
+  pdf.save('biometric_a4_print.pdf');
+}
+
+// ── Controls ─────────────────────────────────────────────────
 $('captureBtn').addEventListener('click', capture);
+$('retakeBtn').addEventListener('click', resetToCamera);
+$('pdfBtn').addEventListener('click', generateA4Pdf);
+$('linesBtn').addEventListener('click', () => {
+  showGuideLines = !showGuideLines;
+  $('linesBtn').textContent = showGuideLines ? t('linesOn') : t('linesBtn');
+  drawResult();
+});
 
 $('fileInput').addEventListener('change', async e => {
   const file = e.target.files[0]; if (!file) return;
+  if (file.size > ACTIVE_PROFILE.maxInputBytes) { safeAlert(t('errFileSize')); e.target.value = ''; return; }
   stopCamera(); showScreen('screenProcessing');
   const imgEl = await loadImg(file);
   const snap  = mk(imgEl.naturalWidth, imgEl.naturalHeight);
@@ -738,20 +1241,17 @@ $('fileInput').addEventListener('change', async e => {
   await processSnap(snap);
 });
 
-$('retakeBtn').addEventListener('click', resetToCamera);
-
 tg.MainButton.onClick(() => {
-  $('resultCanvas').toBlob(blob => {
-    const a = Object.assign(document.createElement('a'), {
-      href:URL.createObjectURL(blob), download:'biometric_photo.jpg'
-    });
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a);
-    setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
-  }, 'image/jpeg', jpgQ);
+  if (!lastResultBlob) return;
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(lastResultBlob), download: 'biometric_35x45.jpg'
+  });
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 });
 
-// ── Helpers ───────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────
 function showScreen(n) {
   ['screenCamera','screenProcessing','screenResult'].forEach(id =>
     $(id).classList.toggle('hidden', id!==n));
@@ -759,15 +1259,17 @@ function showScreen(n) {
 function resetToCamera() {
   tg.MainButton.hide();
   capturedImg = capturedDet = lastLiveDet = null;
-  goodFrames = 0; resetSliders();
+  originalDescriptor = processedDescriptor = null;
+  similarityScore = null;
+  lastResultBlob = null; lastResultMb = 0;
+  preChecks = []; serverChecks = []; shortPhotoKey = null;
+  showGuideLines = false;
+  goodFrames = 0;
+  $('warnBanner').classList.add('hidden');
+  $('pkLine').textContent = '';
+  $('linesBtn').textContent = t('linesBtn');
   $('ringCircle').style.strokeDashoffset = RING_C;
   showScreen('screenCamera'); startCamera();
-}
-function resetSliders() {
-  vOff=0; fRatio=0.75; jpgQ=0.92;
-  $('vPos').value=0;      $('vPosLbl').textContent='0';
-  $('faceScale').value=75; $('scaleLbl').textContent='75%';
-  $('jpgQual').value=92;   $('qualLbl').textContent='92%';
 }
 function mk(w,h) { const c=document.createElement('canvas'); c.width=w; c.height=h; return c; }
 function c2i(canvas) {
