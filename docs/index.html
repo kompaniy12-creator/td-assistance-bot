@@ -9,6 +9,7 @@
 <title>Biometric Photo</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <style>
 :root {
@@ -305,6 +306,7 @@ const I18N = {
     chk_EyesOpen: 'Глаза открыты',
     chk_HeadPose: 'Голова прямо (≤ 15°)',
     chk_AiProcessed: 'AI обработка завершена',
+    chk_BackgroundRemoved: 'Фон заменён на белый',
     chk_PhotoRatio: 'Пропорции 35×45 мм',
     chk_OutputResolution: 'Разрешение результата ≥ 684×883',
     chk_OutputSize: 'Размер файла ≤ 2.5 МБ',
@@ -372,6 +374,7 @@ const I18N = {
     chk_EyesOpen: 'Очі відкриті',
     chk_HeadPose: 'Голова рівно (≤ 15°)',
     chk_AiProcessed: 'AI-обробку завершено',
+    chk_BackgroundRemoved: 'Фон замінено на білий',
     chk_PhotoRatio: 'Пропорції 35×45 мм',
     chk_OutputResolution: 'Роздільна здатність результату ≥ 684×883',
     chk_OutputSize: 'Розмір файлу ≤ 2.5 МБ',
@@ -439,6 +442,7 @@ const I18N = {
     chk_EyesOpen: 'Oczy otwarte',
     chk_HeadPose: 'Głowa prosto (≤ 15°)',
     chk_AiProcessed: 'AI przetworzono',
+    chk_BackgroundRemoved: 'Tło zastąpione białym',
     chk_PhotoRatio: 'Proporcje 35×45 mm',
     chk_OutputResolution: 'Rozdzielczość wyniku ≥ 684×883',
     chk_OutputSize: 'Rozmiar pliku ≤ 2.5 MB',
@@ -506,6 +510,7 @@ const I18N = {
     chk_EyesOpen: 'Eyes open',
     chk_HeadPose: 'Head straight (≤ 15°)',
     chk_AiProcessed: 'AI processing completed',
+    chk_BackgroundRemoved: 'Background replaced with white',
     chk_PhotoRatio: '35×45 mm aspect',
     chk_OutputResolution: 'Output resolution ≥ 684×883',
     chk_OutputSize: 'File size ≤ 2.5 MB',
@@ -572,7 +577,7 @@ const SUPA_URL  = 'https://bltbuptzsswaislqagwe.supabase.co';
 const SUPA_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsdGJ1cHR6c3N3YWlzbHFhZ3dlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNzU1OTQsImV4cCI6MjA4ODY1MTU5NH0.OQk3TwVSaepYdQFAOXIa3GFhu_jvCgZ7LDi1rqrFgN0';
 const FN_URL    = `${SUPA_URL}/functions/v1/process-photo`;
 
-let ready = false, stream = null;
+let ready = false, stream = null, segmenter = null;
 let rafId = null, detecting = false, goodFrames = 0;
 let capturedImg = null, capturedDet = null;
 let lastLiveDet = null;
@@ -595,6 +600,14 @@ async function init() {
     faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
     faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
   ]);
+
+  // MediaPipe selfie segmentation — for classical (non-generative) background replacement.
+  // modelSelection 1 = "landscape" model, sharper edges (better than 0 for portraits at this size).
+  segmenter = new SelfieSegmentation({
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}`
+  });
+  segmenter.setOptions({ modelSelection: 1 });
+
   ready = true;
   $('loadOverlay').classList.add('hidden');
   await startCamera();
@@ -916,23 +929,23 @@ async function processSnap(snap) {
     const cropped = makeCrop(snap, singleDet);
     await wait(150);
 
-    // 4) AI processing via Supabase Edge Function
+    // 4) Classical background replacement (no AI on the face)
     step(3);
-    let aiImg, aiOk = true;
+    let aiImg, processingOk = true;
     serverChecks = []; shortPhotoKey = null;
     try {
-      const r = await withTimeout(processWithAI(cropped), 90000, 'AI processing');
-      aiImg = r.img;
-      shortPhotoKey = r.shortPhotoKey;
-      serverChecks = (r.serverChecks || []).map(c =>
-        ({ ...c, test: t('chk_' + c.label) || c.label })
-      );
+      const processedCanvas = await withTimeout(removeBackground(cropped), 15000, 'background removal');
+      aiImg = await c2i(processedCanvas);
+      // Audit upload (fire-and-forget) — stores both originals for /admin_stats.
+      // We don't block on this: even if it fails, the user gets the result.
+      auditUpload(cropped, processedCanvas).catch(e => console.warn('audit upload failed:', e));
+      serverChecks = [mkCheck('BackgroundRemoved', true, { isMandatory: true })];
     } catch (e) {
-      console.error('AI processing failed:', e);
-      safeAlert(e.quota ? t('quotaExceeded') : t('aiFailed'));
+      console.error('Background removal failed:', e);
+      safeAlert(t('aiFailed'));
       aiImg = await c2i(cropped);
-      aiOk = false;
-      serverChecks = [mkCheck('AiProcessed', false, { isMandatory: true })];
+      processingOk = false;
+      serverChecks = [mkCheck('BackgroundRemoved', false, { isMandatory: true })];
     }
     await wait(150);
 
@@ -940,7 +953,7 @@ async function processSnap(snap) {
     step(4);
     similarityScore = null;
     processedDescriptor = null;
-    if (aiOk && originalDescriptor) {
+    if (processingOk && originalDescriptor) {
       try {
         const aiCanvas = mk(aiImg.naturalWidth || aiImg.width, aiImg.naturalHeight || aiImg.height);
         aiCanvas.getContext('2d').drawImage(aiImg, 0, 0);
@@ -1028,7 +1041,75 @@ function makeCrop(src, det) {
   return out;
 }
 
-// ── AI via Supabase Edge Function ────────────────────────────
+// ── Audit upload (fire-and-forget) ───────────────────────────
+// Sends both original and processed images to Edge Function for /admin_stats.
+// Any failure is logged but doesn't block the user.
+async function auditUpload(originalCanvas, processedCanvas) {
+  const userId = tg.initDataUnsafe?.user?.id?.toString() || 'anonymous';
+  const originalImage  = originalCanvas.toDataURL('image/jpeg', 0.85);
+  const processedImage = processedCanvas.toDataURL('image/jpeg', 0.92);
+  const res = await fetch(FN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${SUPA_ANON}`,
+      'apikey':        SUPA_ANON
+    },
+    body: JSON.stringify({ mode: 'audit', originalImage, processedImage, userId }),
+  });
+  if (!res.ok) throw new Error(`audit HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.shortPhotoKey) {
+    shortPhotoKey = data.shortPhotoKey;
+    $('pkLine').textContent = `${t('pkPrefix')} · ${shortPhotoKey}`;
+  }
+}
+
+// ── Classical background replacement (MediaPipe Selfie Segmentation) ──
+// Returns a new canvas where everything outside the person silhouette is replaced
+// with ACTIVE_PROFILE.background. The person pixels are 100% from the source — no
+// generative regeneration, so face identity is preserved pixel-perfectly.
+function removeBackground(srcCanvas) {
+  return new Promise((resolve, reject) => {
+    if (!segmenter) return reject(new Error('Segmenter not initialized'));
+
+    // Hard timeout — MediaPipe can occasionally hang.
+    const timer = setTimeout(() => reject(new Error('segmentation timeout')), 12000);
+
+    segmenter.onResults(({ segmentationMask }) => {
+      clearTimeout(timer);
+      try {
+        const w = srcCanvas.width, h = srcCanvas.height;
+        const out = mk(w, h);
+        const ctx = out.getContext('2d');
+
+        // 1. Paint background colour
+        ctx.fillStyle = ACTIVE_PROFILE.background;
+        ctx.fillRect(0, 0, w, h);
+
+        // 2. Cut the person out of source via destination-in mask
+        const cut = mk(w, h);
+        const cctx = cut.getContext('2d');
+        cctx.drawImage(srcCanvas, 0, 0);
+        cctx.globalCompositeOperation = 'destination-in';
+        cctx.drawImage(segmentationMask, 0, 0, w, h);
+
+        // 3. Composite onto background
+        ctx.drawImage(cut, 0, 0);
+        resolve(out);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    segmenter.send({ image: srcCanvas }).catch(e => {
+      clearTimeout(timer);
+      reject(e);
+    });
+  });
+}
+
+// ── (Optional) AI via Supabase Edge Function — kept for reference, no longer called ──
 async function processWithAI(canvas) {
   const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
   const userId  = tg.initDataUnsafe?.user?.id?.toString() || 'anonymous';

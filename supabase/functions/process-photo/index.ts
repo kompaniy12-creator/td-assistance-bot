@@ -1,16 +1,16 @@
 // Supabase Edge Function: process-photo
-// Принимает: { image: base64 (data-URL или чистый), userId?: string, mimeType?: string }
-// Возвращает: { id, image: base64-data-url, originalPath, processedPath }
+// Поддерживает два режима:
+//   audit (default with originalImage+processedImage):
+//     Принимает: { mode: "audit", originalImage, processedImage, userId?, mimeType? }
+//     Сохраняет оба изображения в storage, пишет запись в `photos`, возвращает
+//     { id, shortPhotoKey, originalPath, processedPath, serverChecks }.
+//     НЕ вызывает Gemini — обработка делается на клиенте (mediapipe selfie_segmentation).
+//   process (legacy, when only `image` provided):
+//     Принимает: { image, userId?, mimeType? }
+//     Шлёт в Gemini, retry 2x с backoff, timeout 60s, сохраняет в storage,
+//     возвращает обработанное изображение. Оставлено для обратной совместимости.
 //
-// Pipeline:
-// 1. Сохраняет оригинал в bucket 'originals'
-// 2. Шлёт в Google Gemini 2.5 Flash Image (Nano Banana) с retry (2 попытки, backoff 1s/3s) и timeout 60s
-// 3. Сохраняет результат в bucket 'processed'
-// 4. Записывает запись в таблицу photos
-// 5. Возвращает результат фронтенду
-//
-// Логи: structured JSON (user_id, stage, latency_ms, status). Никакого fallback на другие модели —
-// при провале возвращаем ошибку наверх (per ТЗ §6.2).
+// Логи: structured JSON.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { BIOMETRIC_PROMPT_EN } from "./prompts.ts";
@@ -126,23 +126,67 @@ Deno.serve(async (req) => {
   let userId = "anonymous";
   try {
     const body = await req.json();
-    const { image, mimeType = "image/jpeg" } = body;
+    const { mode, mimeType = "image/jpeg" } = body;
     userId = body.userId ?? "anonymous";
 
-    if (!image) return json({ error: "Missing 'image' (base64) in body" }, 400);
-
-    log("request_start", { user_id: userId, mime: mimeType });
-
-    // Strip data: URL prefix if present
-    const b64 = image.replace(/^data:image\/\w+;base64,/, "");
-    const inputBytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    log("request_start", { user_id: userId, mime: mimeType, mode: mode ?? "process" });
 
     const id = crypto.randomUUID();
     const ts = new Date().toISOString().slice(0, 10);
     const originalPath  = `${ts}/${userId}/${id}_original.jpg`;
     const processedPath = `${ts}/${userId}/${id}_processed.jpg`;
-
+    const shortPhotoKey = id.replace(/-/g, "").slice(0, 10);
     const supa = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    const decode = (s: string) => Uint8Array.from(atob(s.replace(/^data:image\/\w+;base64,/, "")),
+                                                  c => c.charCodeAt(0));
+
+    // ── audit mode: store both images, no AI call ─────────────────
+    if (mode === "audit") {
+      const { originalImage, processedImage } = body;
+      if (!originalImage || !processedImage) {
+        return json({ error: "Missing originalImage or processedImage" }, 400);
+      }
+      const origBytes = decode(originalImage);
+      const procBytes = decode(processedImage);
+
+      const t1 = performance.now();
+      await Promise.all([
+        supa.storage.from("originals").upload(originalPath, origBytes,
+          { contentType: mimeType, upsert: false }),
+        supa.storage.from("processed").upload(processedPath, procBytes,
+          { contentType: mimeType, upsert: false }),
+      ]);
+      await supa.from("photos").insert({
+        id, telegram_user_id: userId,
+        original_path: originalPath,
+        processed_path: processedPath,
+        mime_type: mimeType,
+      });
+
+      log("audit_done", {
+        user_id: userId,
+        latency_ms: Math.round(performance.now() - t1),
+        bytes_in: origBytes.length, bytes_out: procBytes.length,
+        total_latency_ms: Math.round(performance.now() - reqStart),
+      });
+
+      return json({
+        id, shortPhotoKey,
+        originalPath, processedPath,
+        serverChecks: [
+          { label: "PhotoStored", isValid: true, canBeFixed: false, isMandatory: false,
+            meta: { bytes_in: origBytes.length, bytes_out: procBytes.length } },
+        ],
+      });
+    }
+
+    // ── legacy process mode (Gemini) ──────────────────────────────
+    const { image } = body;
+    if (!image) return json({ error: "Missing 'image' (base64) in body" }, 400);
+
+    const b64 = image.replace(/^data:image\/\w+;base64,/, "");
+    const inputBytes = decode(image);
 
     // 1) Save original
     const t1 = performance.now();
@@ -196,9 +240,6 @@ Deno.serve(async (req) => {
       bytes_in:  inputBytes.length,
       bytes_out: outBytes.length,
     });
-
-    // Short ID for support — first 10 hex chars of UUID without dashes (à la PhotoAid).
-    const shortPhotoKey = id.replace(/-/g, "").slice(0, 10);
 
     // Server-side checks (taxonomy). The full result list is assembled client-side
     // by merging these with pre-AI validation gates and post-AI similarity/output checks.
