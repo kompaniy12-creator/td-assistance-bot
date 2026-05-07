@@ -12,7 +12,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-const GEMINI_MODEL   = "gemini-2.5-flash-image";
+// Try newer model first (own quota), fall back to 2.5 if not available
+const GEMINI_MODELS  = ["gemini-3.1-flash-image-preview", "gemini-2.5-flash-image"];
 
 const SUPABASE_URL              = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -72,29 +73,45 @@ Deno.serve(async (req) => {
       contentType: mimeType, upsert: false
     });
 
-    // 2) Call Gemini (Nano Banana)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-    const gRes = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: PROMPT },
-            { inline_data: { mime_type: mimeType, data: b64 } }
-          ]
-        }],
-        generationConfig: { responseModalities: ["IMAGE"] }
-      })
-    });
+    // 2) Call Gemini (Nano Banana) — try models in order, skip on 429
+    let result: any = null;
+    let lastErr = "";
+    let lastStatus = 0;
+    for (const model of GEMINI_MODELS) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+      const gRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: PROMPT },
+              { inline_data: { mime_type: mimeType, data: b64 } }
+            ]
+          }],
+          generationConfig: { responseModalities: ["IMAGE"] }
+        })
+      });
 
-    if (!gRes.ok) {
+      if (gRes.ok) {
+        result = await gRes.json();
+        break;
+      }
       const errText = await gRes.text();
-      console.error("Gemini error:", gRes.status, errText.slice(0, 500));
-      return json({ error: `Gemini API ${gRes.status}: ${errText.slice(0, 300)}` }, 502);
+      console.error(`Gemini ${model} ${gRes.status}:`, errText.slice(0, 300));
+      lastErr = errText.slice(0, 300);
+      lastStatus = gRes.status;
+      if (gRes.status === 429) continue;       // quota — try next model
+      return json({ error: `Gemini ${gRes.status}`, code: "GEMINI_ERROR", detail: errText.slice(0, 200) }, 502);
     }
 
-    const result = await gRes.json();
+    if (!result) {
+      return json({
+        error: "AI quota exceeded for all models. Try again later or enable billing.",
+        code: "QUOTA_EXCEEDED",
+        detail: lastErr
+      }, 429);
+    }
     const parts  = result?.candidates?.[0]?.content?.parts ?? [];
     const imgPart = parts.find((p: any) => p.inline_data || p.inlineData);
     if (!imgPart) {

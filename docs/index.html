@@ -512,7 +512,7 @@ async function processSnap(snap) {
       aiImg = await withTimeout(processWithAI(cropped), 60000, 'AI processing');
     } catch (e) {
       console.error('AI processing failed:', e);
-      safeAlert('AI не сработал, показываю кадрированное фото без AI');
+      safeAlert(e.quota ? 'Дневной лимит AI исчерпан, попробуйте позже' : 'AI не сработал, показываю фото без обработки');
       aiImg = await c2i(cropped);  // fallback to plain crop
     }
     await wait(150);
@@ -594,6 +594,11 @@ async function processWithAI(canvas) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
+    if (err.code === 'QUOTA_EXCEEDED') {
+      const e = new Error('Дневной лимит AI исчерпан, попробуйте завтра');
+      e.quota = true;
+      throw e;
+    }
     throw new Error(err.error || `HTTP ${res.status}`);
   }
   const data = await res.json();
