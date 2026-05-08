@@ -31,8 +31,9 @@ body {
 
 #video {
   position:absolute; inset:0; width:100%; height:100%;
-  object-fit:cover; transform:scaleX(-1);
+  object-fit:cover;
 }
+#video.front { transform:scaleX(-1); }      /* mirror selfies only */
 #guideCanvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
 
 .hint-bar {
@@ -77,9 +78,9 @@ body {
 }
 #fileInput { display:none; }
 
-/* Flash toggle button — top-right of camera screen */
-.flash-toggle {
-  position:absolute; top:14px; right:14px; z-index:15;
+/* Camera-screen control buttons (top right) */
+.cam-ctrl {
+  position:absolute; z-index:15;
   width:46px; height:46px; border-radius:50%;
   background:rgba(0,0,0,.45); backdrop-filter:blur(8px);
   border:1px solid rgba(255,255,255,.25);
@@ -87,8 +88,10 @@ body {
   display:flex; align-items:center; justify-content:center;
   transition:background .15s, border-color .15s;
 }
-.flash-toggle.on { background:rgba(255,235,59,.3); border-color:#ffeb3b; }
-.flash-toggle:active { transform:scale(.92); }
+.cam-ctrl:active { transform:scale(.92); }
+#flashBtn { top:14px; right:14px; }
+#flashBtn.on { background:rgba(255,235,59,.3); border-color:#ffeb3b; }
+#camSwitchBtn { top:14px; right:70px; }
 
 /* White-screen flash overlay — covers entire viewport during capture */
 .flash-screen {
@@ -189,7 +192,8 @@ body {
   <video id="video" autoplay playsinline muted></video>
   <canvas id="guideCanvas"></canvas>
 
-  <button id="flashBtn" class="flash-toggle" aria-label="Flash" title="Flash">⚡</button>
+  <button id="camSwitchBtn" class="cam-ctrl" aria-label="Switch camera" title="Switch camera">🔄</button>
+  <button id="flashBtn"     class="cam-ctrl" aria-label="Flash"          title="Flash">⚡</button>
 
   <div class="load-overlay" id="loadOverlay">
     <div class="load-spinner"></div>
@@ -627,6 +631,10 @@ let showGuideLines = false;
 let flashOnCapture = (() => {         // user preference for screen-flash at capture
   try { return localStorage.getItem('flashOnCapture') === '1'; } catch { return false; }
 })();
+let cameraFacing = (() => {           // 'user' (selfie) or 'environment' (rear)
+  try { return localStorage.getItem('cameraFacing') === 'environment' ? 'environment' : 'user'; }
+  catch { return 'user'; }
+})();
 
 const $ = id => document.getElementById(id);
 
@@ -653,12 +661,18 @@ async function init() {
 
 // ── Camera ────────────────────────────────────────────────────
 async function startCamera() {
+  // Stop any existing stream first (in case of re-entry from camera switch)
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:'user', width:{ideal:1280}, height:{ideal:1280} }, audio:false
+      video: { facingMode: cameraFacing, width:{ideal:1280}, height:{ideal:1280} }, audio:false
     });
-    $('video').srcObject = stream;
-    await new Promise(r => $('video').onloadedmetadata = r);
+    const video = $('video');
+    video.srcObject = stream;
+    // Mirror only the selfie preview; the rear-camera feed is not mirrored
+    video.classList.toggle('front', cameraFacing === 'user');
+    video.classList.toggle('rear',  cameraFacing === 'environment');
+    await new Promise(r => video.onloadedmetadata = r);
     $('hintText').textContent = t('placeFace');
     startLoop();
   } catch {
@@ -667,6 +681,13 @@ async function startCamera() {
     $('hintIcon').textContent = '📁';
     $('hintText').textContent = t('galleryBtn');
   }
+}
+
+async function switchCamera() {
+  cameraFacing = cameraFacing === 'user' ? 'environment' : 'user';
+  try { localStorage.setItem('cameraFacing', cameraFacing); } catch {}
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  await startCamera();
 }
 
 function stopCamera() {
@@ -1569,6 +1590,8 @@ $('flashBtn').addEventListener('click', () => {
   syncFlashBtn();
 });
 syncFlashBtn();
+
+$('camSwitchBtn').addEventListener('click', switchCamera);
 $('linesBtn').addEventListener('click', () => {
   showGuideLines = !showGuideLines;
   $('linesBtn').textContent = showGuideLines ? t('linesOn') : t('linesBtn');
