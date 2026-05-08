@@ -566,7 +566,9 @@ const PROFILES = {
     minFaceSimilarity: 0.85,
     retouch: true,                    // mild skin smoothing on flat areas (used in local mode only)
     useAi: true,                      // true = Gemini AI processing, false = local mediapipe segmentation
-    flashStrength: 0.12,              // 0.0 = off, 0.20 = strong; brightens face area like soft camera flash
+    flashStrength: 0.10,              // 0.0 = off, 0.20 = strong; brightens face area like soft camera flash
+    sharpen: 0.55,                    // unsharp amount (0.3 subtle, 0.6 strong)
+    sharpenRadius: 1.2,               // unsharp radius in px
   },
 };
 const ACTIVE_PROFILE = PROFILES.PL_RESIDENCE;
@@ -1286,6 +1288,35 @@ async function compressToTarget(canvas) {
   return { blob: fallback, mb: fallback.size / 1024 / 1024, quality: 70 };
 }
 
+// ── Unsharp mask: classical sharpening pass ──────────────────
+// Increases perceived sharpness (eyes, brows, lashes, lips) without
+// adding noise or edge halos at moderate amount. Works on the whole
+// canvas (no mask needed — sharpening flat skin areas is harmless
+// because they have no high-frequency content to amplify).
+function sharpen(canvas, amount = 0.45, radiusPx = 1.2) {
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const orig = ctx.getImageData(0, 0, w, h);
+  const od = orig.data;
+
+  // Render blurred copy
+  const blurC = mk(w, h);
+  const bctx = blurC.getContext('2d');
+  bctx.filter = `blur(${radiusPx}px)`;
+  bctx.drawImage(canvas, 0, 0);
+  const bd = bctx.getImageData(0, 0, w, h).data;
+
+  // unsharp: out = orig + amount * (orig - blur)
+  for (let i = 0; i < od.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const v = od[i + c] + amount * (od[i + c] - bd[i + c]);
+      od[i + c] = v < 0 ? 0 : v > 255 ? 255 : v | 0;
+    }
+  }
+  ctx.putImageData(orig, 0, 0);
+  return canvas;
+}
+
 // ── Soft "camera flash" face lightening ──────────────────────
 // Applies a controlled gamma+lift curve only inside the face oval
 // (built from jawline + eyebrow landmarks). Soft-edged mask via blur,
@@ -1308,22 +1339,29 @@ function applyFaceFlash(canvas, faceDet, strength) {
   const faceH    = chinY - browTopY;
   const foreheadY = browTopY - faceH * 0.45;
 
-  // Build face oval polygon: jaw outline + arc to forehead
+  // Build a proper face ellipse — wide enough to cover cheeks and tall enough
+  // to reach forehead. Centered between eye line and chin.
+  const eyes = lm.getLeftEye().concat(lm.getRightEye());
+  const eyeY = eyes.reduce((s, p) => s + p.y, 0) / eyes.length;
+  const jawXs = jaw.map(p => p.x);
+  const faceLeft  = Math.min(...jawXs);
+  const faceRight = Math.max(...jawXs);
+  const cx = (faceLeft + faceRight) / 2;
+  const cy = (eyeY + chinY) / 2 - faceH * 0.15;          // shift up to include forehead
+  const rx = (faceRight - faceLeft) / 2 * 1.15;          // a touch wider than jaw
+  const ry = faceH * 0.95;                               // tall enough for forehead
+
   const mask = mk(w, h);
   const mctx = mask.getContext('2d');
   mctx.fillStyle = 'white';
   mctx.beginPath();
-  mctx.moveTo(jaw[0].x, jaw[0].y);
-  for (let i = 1; i < jaw.length; i++) mctx.lineTo(jaw[i].x, jaw[i].y);
-  // Right side up to forehead
-  mctx.lineTo(jaw[jaw.length - 1].x, foreheadY);
-  mctx.lineTo(jaw[0].x,                foreheadY);
-  mctx.closePath();
+  mctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
   mctx.fill();
-  // Soft edge — feather mask so transition is smooth
+
+  // Heavy feathering — large blur so the mask edge is imperceptible
   const blurred = mk(w, h);
   const bctx = blurred.getContext('2d');
-  bctx.filter = `blur(${Math.max(6, faceH * 0.06)}px)`;
+  bctx.filter = `blur(${Math.max(15, faceH * 0.18)}px)`;
   bctx.drawImage(mask, 0, 0);
   const maskData = bctx.getImageData(0, 0, w, h).data;
 
@@ -1404,6 +1442,11 @@ async function render() {
     } catch (e) {
       console.warn('flash skip:', e.message);
     }
+  }
+
+  // Sharpening pass — counters Gemini's slight softness in the result.
+  if (ACTIVE_PROFILE.sharpen > 0) {
+    sharpen(canvas, ACTIVE_PROFILE.sharpen, ACTIVE_PROFILE.sharpenRadius || 1.2);
   }
 
   const badge = $('faceBadge');
