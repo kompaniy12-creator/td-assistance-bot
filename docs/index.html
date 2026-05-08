@@ -566,6 +566,7 @@ const PROFILES = {
     minFaceSimilarity: 0.85,
     retouch: true,                    // mild skin smoothing on flat areas (used in local mode only)
     useAi: true,                      // true = Gemini AI processing, false = local mediapipe segmentation
+    flashStrength: 0.12,              // 0.0 = off, 0.20 = strong; brightens face area like soft camera flash
   },
 };
 const ACTIVE_PROFILE = PROFILES.PL_RESIDENCE;
@@ -1285,6 +1286,71 @@ async function compressToTarget(canvas) {
   return { blob: fallback, mb: fallback.size / 1024 / 1024, quality: 70 };
 }
 
+// ── Soft "camera flash" face lightening ──────────────────────
+// Applies a controlled gamma+lift curve only inside the face oval
+// (built from jawline + eyebrow landmarks). Soft-edged mask via blur,
+// highlights compressed to prevent overexposure (no blown-out skin),
+// equally applied to R/G/B (no colour shift, no red-eye risk),
+// pixel-level only — does NOT alter face geometry.
+function applyFaceFlash(canvas, faceDet, strength) {
+  if (!faceDet?.landmarks || strength <= 0) return canvas;
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const lm = faceDet.landmarks;
+  const jaw   = lm.getJawOutline();
+  const lBrow = lm.getLeftEyeBrow();
+  const rBrow = lm.getRightEyeBrow();
+  if (!jaw.length || !lBrow.length || !rBrow.length) return canvas;
+
+  // Estimate forehead boundary: ~45% of (chin → brow) above the brow line
+  const browTopY = Math.min(...lBrow.concat(rBrow).map(p => p.y));
+  const chinY    = Math.max(...jaw.map(p => p.y));
+  const faceH    = chinY - browTopY;
+  const foreheadY = browTopY - faceH * 0.45;
+
+  // Build face oval polygon: jaw outline + arc to forehead
+  const mask = mk(w, h);
+  const mctx = mask.getContext('2d');
+  mctx.fillStyle = 'white';
+  mctx.beginPath();
+  mctx.moveTo(jaw[0].x, jaw[0].y);
+  for (let i = 1; i < jaw.length; i++) mctx.lineTo(jaw[i].x, jaw[i].y);
+  // Right side up to forehead
+  mctx.lineTo(jaw[jaw.length - 1].x, foreheadY);
+  mctx.lineTo(jaw[0].x,                foreheadY);
+  mctx.closePath();
+  mctx.fill();
+  // Soft edge — feather mask so transition is smooth
+  const blurred = mk(w, h);
+  const bctx = blurred.getContext('2d');
+  bctx.filter = `blur(${Math.max(6, faceH * 0.06)}px)`;
+  bctx.drawImage(mask, 0, 0);
+  const maskData = bctx.getImageData(0, 0, w, h).data;
+
+  // Build gamma + lift LUT, with highlight roll-off to prevent overexposure
+  const gamma = 1 - strength;             // <1 brightens midtones
+  const lift  = strength * 22;            // shadow lift
+  const lut = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) {
+    let adj = Math.pow(v / 255, gamma) * 255 + lift;
+    // Soft compress above 235 so highlights never blow out
+    if (adj > 235) adj = 235 + (adj - 235) * 0.25;
+    lut[v] = Math.min(252, Math.max(0, adj | 0));   // cap at 252 (no pure white)
+  }
+
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const m = maskData[i] / 255;          // 0..1 (smoothed face mask)
+    if (m <= 0.02) continue;
+    d[i]   = (d[i]   * (1 - m) + lut[d[i]]   * m) | 0;
+    d[i+1] = (d[i+1] * (1 - m) + lut[d[i+1]] * m) | 0;
+    d[i+2] = (d[i+2] * (1 - m) + lut[d[i+2]] * m) | 0;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return canvas;
+}
+
 // Draw the AI image (or cropped fallback) onto resultCanvas, optionally with guide lines.
 function drawResult() {
   const canvas = $('resultCanvas'), ctx = canvas.getContext('2d');
@@ -1323,13 +1389,28 @@ function drawGuideLines(ctx) {
 // ── Render result ────────────────────────────────────────────
 async function render() {
   drawResult();
+  const canvas = $('resultCanvas');
+
+  // Soft "camera flash" face lightening — controlled, pixel-level,
+  // never alters geometry or colour. Strength from active profile.
+  if (ACTIVE_PROFILE.flashStrength > 0) {
+    try {
+      const det = await withTimeout(
+        faceapi.detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: .2 }))
+          .withFaceLandmarks(),
+        4000, 'flash-detect'
+      );
+      if (det) applyFaceFlash(canvas, det, ACTIVE_PROFILE.flashStrength);
+    } catch (e) {
+      console.warn('flash skip:', e.message);
+    }
+  }
 
   const badge = $('faceBadge');
   badge.textContent = t('badgeAi');
   badge.style.background = 'rgba(39,174,96,.85)';
 
   // Compress to ≤ 2.5 MB
-  const canvas = $('resultCanvas');
   const { blob, mb } = await compressToTarget(canvas);
   lastResultBlob = blob; lastResultMb = mb;
 
