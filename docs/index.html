@@ -266,7 +266,7 @@ const I18N = {
     pdfBtn: '📄 PDF · 4 фото на A4',
     retakeBtn: '↩ Переснять',
     downloadJpg: '⬇ Скачать JPG · {mb} МБ',
-    badgeAi: '✨ AI обработано',
+    badgeAi: '✓ Готово к подаче',
     // Validation errors
     errFileSize: 'Файл больше 20 МБ — выберите другое фото',
     errLowRes: 'Разрешение слишком низкое (мин. 400×500 px)',
@@ -336,7 +336,7 @@ const I18N = {
     pdfBtn: '📄 PDF · 4 фото на A4',
     retakeBtn: '↩ Перезняти',
     downloadJpg: '⬇ Завантажити JPG · {mb} МБ',
-    badgeAi: '✨ AI оброблено',
+    badgeAi: '✓ Готово до подачі',
     errFileSize: 'Файл більше 20 МБ — оберіть інше фото',
     errLowRes: 'Роздільна здатність занадто низька (мін. 400×500 px)',
     errNoFace: 'Обличчя не виявлено. Спробуйте при кращому освітленні',
@@ -404,7 +404,7 @@ const I18N = {
     pdfBtn: '📄 PDF · 4 zdjęcia A4',
     retakeBtn: '↩ Zrób ponownie',
     downloadJpg: '⬇ Pobierz JPG · {mb} MB',
-    badgeAi: '✨ AI przetworzono',
+    badgeAi: '✓ Gotowe do złożenia',
     errFileSize: 'Plik większy niż 20 MB — wybierz inne zdjęcie',
     errLowRes: 'Rozdzielczość zbyt niska (min. 400×500 px)',
     errNoFace: 'Nie wykryto twarzy. Spróbuj przy lepszym oświetleniu',
@@ -472,7 +472,7 @@ const I18N = {
     pdfBtn: '📄 PDF · 4 photos A4',
     retakeBtn: '↩ Retake',
     downloadJpg: '⬇ Download JPG · {mb} MB',
-    badgeAi: '✨ AI processed',
+    badgeAi: '✓ Ready to submit',
     errFileSize: 'File larger than 20 MB — pick another photo',
     errLowRes: 'Resolution too low (min. 400×500 px)',
     errNoFace: 'No face detected. Try better lighting',
@@ -1016,14 +1016,21 @@ function cosineSimilarity(a, b) {
 }
 
 // ── Local crop to 35×45 mm ───────────────────────────────────
+// face-api's detection box is forehead→chin (FACE), not crown→chin (HEAD).
+// MSWiA / ICAO require the HEAD (chin to crown of hair) to occupy ~70-80%
+// of the 45mm height, with 3-5mm margin above the crown.
+// Forehead-to-chin is ≈ 80% of crown-to-chin, so:
+//   face_bbox / frame_height = 0.80 × head_height/frame_height = 0.80 × 0.75 = 0.60
+// We use 0.62 to err slightly on the looser (more head visible) side.
+// Vertical offset: top of frame = forehead_y - 0.19 × pH gives ~3-5mm above crown.
 function makeCrop(src, det) {
   const b   = det.detection.box;
-  const fRatio = 0.75;          // face ≈ 75% of frame height
+  const fRatio = 0.62;
   const pH  = b.height / fRatio;
   const pW  = pH * ASPECT;
   const cx  = b.x + b.width / 2;
   const cropX = cx - pW / 2;
-  const cropY = b.y - pH * 0.16;
+  const cropY = b.y - pH * 0.19;
 
   const out = mk(OUT_W, OUT_H);
   const ctx = out.getContext('2d');
