@@ -36,14 +36,17 @@ body {
 #video.front { transform:scaleX(-1); }      /* mirror selfies only */
 #guideCanvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
 
+/* Hints near the top of the screen (close to the camera lens) so the
+   user keeps looking forward instead of down at the bottom of the phone. */
 .hint-bar {
-  position:absolute; bottom:150px; left:0; right:0;
-  display:flex; flex-direction:column; align-items:center; gap:6px; z-index:10;
+  position:absolute; top:18px; left:14px; right:130px;
+  display:flex; flex-direction:row; align-items:center; gap:8px; z-index:10;
 }
-.hint-icon { font-size:28px; }
+.hint-icon { font-size:22px; flex-shrink:0; }
 .hint-text {
-  font-size:16px; font-weight:700; text-align:center; padding:0 24px;
-  text-shadow:0 1px 8px rgba(0,0,0,.9);
+  font-size:15px; font-weight:700; text-align:left;
+  text-shadow:0 1px 8px rgba(0,0,0,.95), 0 0 14px rgba(0,0,0,.7);
+  line-height:1.2;
 }
 
 .capture-area {
