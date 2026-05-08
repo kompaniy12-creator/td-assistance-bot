@@ -296,6 +296,7 @@ const I18N = {
     quotaExceeded: 'Дневной лимит AI исчерпан, попробуйте позже',
     aiFailed: 'AI не сработал — показываю кадрированное фото без обработки',
     procError: 'Ошибка обработки. Попробуйте ещё раз',
+    saveHint: 'Зажмите фото и выберите «Сохранить в Фото»',
     linesBtn: '📐 Линии обреза',
     linesOn: '📐 Скрыть линии',
     pkPrefix: 'ID',
@@ -364,6 +365,7 @@ const I18N = {
     quotaExceeded: 'Денний ліміт AI вичерпано, спробуйте пізніше',
     aiFailed: 'AI не спрацював — показую кадроване фото без обробки',
     procError: 'Помилка обробки. Спробуйте ще раз',
+    saveHint: 'Затисніть фото і виберіть «Зберегти у Фото»',
     linesBtn: '📐 Лінії обрізу',
     linesOn: '📐 Сховати лінії',
     pkPrefix: 'ID',
@@ -432,6 +434,7 @@ const I18N = {
     quotaExceeded: 'Dzienny limit AI wyczerpany, spróbuj później',
     aiFailed: 'AI nie zadziałał — pokazuję wykadrowane zdjęcie bez obróbki',
     procError: 'Błąd przetwarzania. Spróbuj ponownie',
+    saveHint: 'Przytrzymaj zdjęcie i wybierz „Zapisz w Zdjęciach”',
     linesBtn: '📐 Linie kadrowania',
     linesOn: '📐 Ukryj linie',
     pkPrefix: 'ID',
@@ -500,6 +503,7 @@ const I18N = {
     quotaExceeded: 'AI daily limit reached, try later',
     aiFailed: 'AI failed — showing cropped photo without processing',
     procError: 'Processing error. Please try again',
+    saveHint: 'Long-press the photo and tap "Save Image"',
     linesBtn: '📐 Crop guide lines',
     linesOn: '📐 Hide lines',
     pkPrefix: 'ID',
@@ -1435,15 +1439,49 @@ $('fileInput').addEventListener('change', async e => {
   await processSnap(snap);
 });
 
-tg.MainButton.onClick(() => {
+// Save the result. iOS Telegram WebApp blocks `<a download>` (WebKit limitation),
+// so we prefer Web Share API (native iOS share sheet → "Save Image"), then fall
+// back to opening the blob URL in a new tab (where user can long-press → Save).
+async function saveResult() {
   if (!lastResultBlob) return;
-  const a = Object.assign(document.createElement('a'), {
-    href: URL.createObjectURL(lastResultBlob), download: 'biometric_35x45.jpg'
-  });
+  const file = new File([lastResultBlob], 'biometric_35x45.jpg', { type: 'image/jpeg' });
+
+  // 1) Web Share API — best on iOS (works in Telegram WebView since iOS 16+)
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: 'Biometric photo' });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;        // user dismissed
+      console.warn('share failed:', e);
+    }
+  }
+
+  // 2) Open in a new tab via blob URL — long-press → Save Image
+  const url = URL.createObjectURL(lastResultBlob);
+  try {
+    if (typeof tg.openLink === 'function') {
+      // tg.openLink rejects blob: — use plain window.open
+      window.open(url, '_blank');
+    } else {
+      window.open(url, '_blank');
+    }
+    safeAlert(t('saveHint'));
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    return;
+  } catch (e) { /* fall through */ }
+
+  // 3) Classic <a download> as last resort
+  const a = Object.assign(document.createElement('a'),
+    { href: url, download: 'biometric_35x45.jpg' });
   document.body.appendChild(a); a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-});
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+tg.MainButton.onClick(saveResult);
+// Also wire the result image itself: tap to save (mobile UX)
+$('resultCanvas').addEventListener('click', saveResult);
 
 // ── Helpers ──────────────────────────────────────────────────
 function showScreen(n) {
