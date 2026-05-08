@@ -1016,21 +1016,28 @@ function cosineSimilarity(a, b) {
 }
 
 // ── Local crop to 35×45 mm ───────────────────────────────────
-// face-api's detection box is forehead→chin (FACE), not crown→chin (HEAD).
-// MSWiA / ICAO require the HEAD (chin to crown of hair) to occupy ~70-80%
-// of the 45mm height, with 3-5mm margin above the crown.
-// Forehead-to-chin is ≈ 80% of crown-to-chin, so:
-//   face_bbox / frame_height = 0.80 × head_height/frame_height = 0.80 × 0.75 = 0.60
-// We use 0.62 to err slightly on the looser (more head visible) side.
-// Vertical offset: top of frame = forehead_y - 0.19 × pH gives ~3-5mm above crown.
+// Landmark-based crop matching visafoto / ICAO / MSWiA spec exactly:
+//   • eye line at ~47% of frame height from top (visafoto: 21mm of 45mm = 46.7%)
+//   • chin at ~84% of frame height (37.5mm of 45mm)
+//   • eye→chin distance therefore equals 37% of frame height
+// Using landmark positions (eye centers, jaw outline) is far more reliable than
+// face-api's detection box, which is unstable across face shapes.
+const EYE_LINE_RATIO  = 0.47;   // eye Y / frame_h from top
+const EYE_TO_CHIN_RATIO = 0.37; // (chin_y - eye_y) / frame_h
 function makeCrop(src, det) {
-  const b   = det.detection.box;
-  const fRatio = 0.62;
-  const pH  = b.height / fRatio;
-  const pW  = pH * ASPECT;
-  const cx  = b.x + b.width / 2;
-  const cropX = cx - pW / 2;
-  const cropY = b.y - pH * 0.19;
+  const lm = det.landmarks;
+  const lEye = lm.getLeftEye(), rEye = lm.getRightEye();
+  const eyeY = (lEye.concat(rEye)).reduce((s, p) => s + p.y, 0) / (lEye.length + rEye.length);
+  const eyeX = (lEye.concat(rEye)).reduce((s, p) => s + p.x, 0) / (lEye.length + rEye.length);
+  const jaw  = lm.getJawOutline();
+  const chinY = Math.max(...jaw.map(p => p.y));
+
+  const eyeToChin = chinY - eyeY;
+  const pH = eyeToChin / EYE_TO_CHIN_RATIO;
+  const pW = pH * ASPECT;
+
+  const cropX = eyeX - pW / 2;
+  const cropY = eyeY - pH * EYE_LINE_RATIO;
 
   const out = mk(OUT_W, OUT_H);
   const ctx = out.getContext('2d');
