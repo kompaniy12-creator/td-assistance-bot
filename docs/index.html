@@ -77,6 +77,27 @@ body {
 }
 #fileInput { display:none; }
 
+/* Flash toggle button — top-right of camera screen */
+.flash-toggle {
+  position:absolute; top:14px; right:14px; z-index:15;
+  width:46px; height:46px; border-radius:50%;
+  background:rgba(0,0,0,.45); backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.25);
+  color:#fff; font-size:22px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:background .15s, border-color .15s;
+}
+.flash-toggle.on { background:rgba(255,235,59,.3); border-color:#ffeb3b; }
+.flash-toggle:active { transform:scale(.92); }
+
+/* White-screen flash overlay — covers entire viewport during capture */
+.flash-screen {
+  position:fixed; inset:0; background:#fff;
+  opacity:0; pointer-events:none; z-index:9999;
+  transition:opacity .08s ease-out;
+}
+.flash-screen.fire { opacity:1; }
+
 .load-overlay {
   position:absolute; inset:0; background:rgba(0,0,0,.72);
   display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -160,10 +181,15 @@ body {
 </head>
 <body>
 
+<!-- White-screen flash overlay (used during capture if flash is on) -->
+<div id="flashScreen" class="flash-screen"></div>
+
 <!-- SCREEN 1: Camera -->
 <div id="screenCamera" class="screen">
   <video id="video" autoplay playsinline muted></video>
   <canvas id="guideCanvas"></canvas>
+
+  <button id="flashBtn" class="flash-toggle" aria-label="Flash" title="Flash">⚡</button>
 
   <div class="load-overlay" id="loadOverlay">
     <div class="load-spinner"></div>
@@ -598,6 +624,9 @@ let preChecks = [];                   // pre-AI taxonomy items
 let serverChecks = [];                // taxonomy items returned by Edge Function
 let shortPhotoKey = null;             // 10-hex token for support
 let showGuideLines = false;
+let flashOnCapture = (() => {         // user preference for screen-flash at capture
+  try { return localStorage.getItem('flashOnCapture') === '1'; } catch { return false; }
+})();
 
 const $ = id => document.getElementById(id);
 
@@ -746,13 +775,38 @@ function startLoop() {
   rafId = requestAnimationFrame(tick);
 }
 
+// ── Screen flash (front-facing fill light) ───────────────────
+// Pure-white full-viewport overlay illuminates the user's face. We give
+// the camera ~280ms to auto-expose under the new ambient light, then
+// grab the frame, then fade the overlay out. Total user-perceived flash
+// is ~350-400ms — feels like a real flash.
+async function fireScreenFlash() {
+  const overlay = $('flashScreen');
+  overlay.classList.add('fire');
+  // Let the camera's auto-exposure catch up to the brighter scene
+  await wait(280);
+}
+
+function endScreenFlash() {
+  $('flashScreen').classList.remove('fire');
+}
+
 // ── Capture ───────────────────────────────────────────────────
 async function capture() {
   if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
   const video = $('video');
   const vw = video.videoWidth || 1280, vh = video.videoHeight || 1280;
+
+  if (flashOnCapture) {
+    await fireScreenFlash();
+  }
+
   const snap = mk(vw, vh);
   snap.getContext('2d').drawImage(video, 0, 0);
+
+  if (flashOnCapture) {
+    endScreenFlash();
+  }
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 
   showScreen('screenProcessing');
@@ -1502,6 +1556,19 @@ async function generateA4Pdf() {
 $('captureBtn').addEventListener('click', capture);
 $('retakeBtn').addEventListener('click', resetToCamera);
 $('pdfBtn').addEventListener('click', generateA4Pdf);
+
+// Flash toggle — persisted in localStorage
+function syncFlashBtn() {
+  const btn = $('flashBtn');
+  btn.classList.toggle('on', flashOnCapture);
+  btn.textContent = flashOnCapture ? '⚡' : '🌙';
+}
+$('flashBtn').addEventListener('click', () => {
+  flashOnCapture = !flashOnCapture;
+  try { localStorage.setItem('flashOnCapture', flashOnCapture ? '1' : '0'); } catch {}
+  syncFlashBtn();
+});
+syncFlashBtn();
 $('linesBtn').addEventListener('click', () => {
   showGuideLines = !showGuideLines;
   $('linesBtn').textContent = showGuideLines ? t('linesOn') : t('linesBtn');
