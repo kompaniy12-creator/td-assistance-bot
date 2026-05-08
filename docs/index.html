@@ -1317,73 +1317,38 @@ function sharpen(canvas, amount = 0.45, radiusPx = 1.2) {
   return canvas;
 }
 
-// ── Soft "camera flash" face lightening ──────────────────────
-// Applies a controlled gamma+lift curve only inside the face oval
-// (built from jawline + eyebrow landmarks). Soft-edged mask via blur,
-// highlights compressed to prevent overexposure (no blown-out skin),
-// equally applied to R/G/B (no colour shift, no red-eye risk),
-// pixel-level only — does NOT alter face geometry.
-function applyFaceFlash(canvas, faceDet, strength) {
-  if (!faceDet?.landmarks || strength <= 0) return canvas;
-  const w = canvas.width, h = canvas.height;
+// ── Soft global "camera flash" lightening ────────────────────
+// Applies a gamma + shadow-lift curve to the WHOLE canvas — no face
+// mask, no boundary artifacts. White background pixels stay white
+// because the curve passes through values ≥235 unchanged. Skin (in
+// midtones) lifts smoothly, hair shadows fill in gently. Equal R/G/B
+// (no colour shift, no red-eye), no geometry change.
+function applyFaceFlash(canvas, _faceDet, strength) {
+  if (strength <= 0) return canvas;
   const ctx = canvas.getContext('2d');
-  const lm = faceDet.landmarks;
-  const jaw   = lm.getJawOutline();
-  const lBrow = lm.getLeftEyeBrow();
-  const rBrow = lm.getRightEyeBrow();
-  if (!jaw.length || !lBrow.length || !rBrow.length) return canvas;
 
-  // Estimate forehead boundary: ~45% of (chin → brow) above the brow line
-  const browTopY = Math.min(...lBrow.concat(rBrow).map(p => p.y));
-  const chinY    = Math.max(...jaw.map(p => p.y));
-  const faceH    = chinY - browTopY;
-  const foreheadY = browTopY - faceH * 0.45;
-
-  // Build a proper face ellipse — wide enough to cover cheeks and tall enough
-  // to reach forehead. Centered between eye line and chin.
-  const eyes = lm.getLeftEye().concat(lm.getRightEye());
-  const eyeY = eyes.reduce((s, p) => s + p.y, 0) / eyes.length;
-  const jawXs = jaw.map(p => p.x);
-  const faceLeft  = Math.min(...jawXs);
-  const faceRight = Math.max(...jawXs);
-  const cx = (faceLeft + faceRight) / 2;
-  const cy = (eyeY + chinY) / 2 - faceH * 0.15;          // shift up to include forehead
-  const rx = (faceRight - faceLeft) / 2 * 1.15;          // a touch wider than jaw
-  const ry = faceH * 0.95;                               // tall enough for forehead
-
-  const mask = mk(w, h);
-  const mctx = mask.getContext('2d');
-  mctx.fillStyle = 'white';
-  mctx.beginPath();
-  mctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-  mctx.fill();
-
-  // Heavy feathering — large blur so the mask edge is imperceptible
-  const blurred = mk(w, h);
-  const bctx = blurred.getContext('2d');
-  bctx.filter = `blur(${Math.max(15, faceH * 0.18)}px)`;
-  bctx.drawImage(mask, 0, 0);
-  const maskData = bctx.getImageData(0, 0, w, h).data;
-
-  // Build gamma + lift LUT, with highlight roll-off to prevent overexposure
   const gamma = 1 - strength;             // <1 brightens midtones
-  const lift  = strength * 22;            // shadow lift
+  const lift  = strength * 18;            // shadow lift
   const lut = new Uint8ClampedArray(256);
   for (let v = 0; v < 256; v++) {
-    let adj = Math.pow(v / 255, gamma) * 255 + lift;
-    // Soft compress above 235 so highlights never blow out
-    if (adj > 235) adj = 235 + (adj - 235) * 0.25;
-    lut[v] = Math.min(252, Math.max(0, adj | 0));   // cap at 252 (no pure white)
+    let adj;
+    if (v >= 235) {
+      // Highlights pass through unchanged — white stays white, no overexposure
+      adj = v;
+    } else {
+      adj = Math.pow(v / 255, gamma) * 255 + lift;
+      // Smooth roll-off into highlights so there's no curve discontinuity
+      if (adj > 220) adj = 220 + (adj - 220) * 0.4;
+    }
+    lut[v] = Math.min(255, Math.max(0, adj | 0));
   }
 
-  const imgData = ctx.getImageData(0, 0, w, h);
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const d = imgData.data;
   for (let i = 0; i < d.length; i += 4) {
-    const m = maskData[i] / 255;          // 0..1 (smoothed face mask)
-    if (m <= 0.02) continue;
-    d[i]   = (d[i]   * (1 - m) + lut[d[i]]   * m) | 0;
-    d[i+1] = (d[i+1] * (1 - m) + lut[d[i+1]] * m) | 0;
-    d[i+2] = (d[i+2] * (1 - m) + lut[d[i+2]] * m) | 0;
+    d[i]   = lut[d[i]];
+    d[i+1] = lut[d[i+1]];
+    d[i+2] = lut[d[i+2]];
   }
   ctx.putImageData(imgData, 0, 0);
   return canvas;
@@ -1429,19 +1394,9 @@ async function render() {
   drawResult();
   const canvas = $('resultCanvas');
 
-  // Soft "camera flash" face lightening — controlled, pixel-level,
-  // never alters geometry or colour. Strength from active profile.
+  // Soft global "flash" — pixel-level tone curve, no mask, no boundary.
   if (ACTIVE_PROFILE.flashStrength > 0) {
-    try {
-      const det = await withTimeout(
-        faceapi.detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: .2 }))
-          .withFaceLandmarks(),
-        4000, 'flash-detect'
-      );
-      if (det) applyFaceFlash(canvas, det, ACTIVE_PROFILE.flashStrength);
-    } catch (e) {
-      console.warn('flash skip:', e.message);
-    }
+    applyFaceFlash(canvas, null, ACTIVE_PROFILE.flashStrength);
   }
 
   // Sharpening pass — counters Gemini's slight softness in the result.
