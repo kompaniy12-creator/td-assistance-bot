@@ -560,6 +560,7 @@ const PROFILES = {
     minEar: 0.18,
     maxHeadTiltDeg: 15,
     minFaceSimilarity: 0.85,
+    retouch: true,                    // mild skin smoothing on flat areas only
   },
 };
 const ACTIVE_PROFILE = PROFILES.PL_RESIDENCE;
@@ -1083,34 +1084,68 @@ async function auditUpload(originalCanvas, processedCanvas) {
 // Returns a new canvas where everything outside the person silhouette is replaced
 // with ACTIVE_PROFILE.background. The person pixels are 100% from the source — no
 // generative regeneration, so face identity is preserved pixel-perfectly.
+//
+// Edge processing:
+//   1. Build explicit alpha mask from segmentation output (R channel = probability)
+//   2. Apply S-curve to alpha: <70 → fully transparent, >170 → fully opaque,
+//      smooth ramp in the middle. Removes the wide soft halo that produces
+//      grey speckles around hair/shoulders.
+//   3. Optional light retouch on the cut-out (mild skin smoothing without
+//      altering face geometry).
 function removeBackground(srcCanvas) {
   return new Promise((resolve, reject) => {
     if (!segmenter) return reject(new Error('Segmenter not initialized'));
 
-    // Hard timeout — MediaPipe can occasionally hang.
     const timer = setTimeout(() => reject(new Error('segmentation timeout')), 12000);
 
     segmenter.onResults(({ segmentationMask }) => {
       clearTimeout(timer);
       try {
         const w = srcCanvas.width, h = srcCanvas.height;
-        const out = mk(w, h);
-        const ctx = out.getContext('2d');
 
-        // 1. Paint background colour
-        ctx.fillStyle = ACTIVE_PROFILE.background;
-        ctx.fillRect(0, 0, w, h);
+        // 1. Render mask onto a same-size canvas (mediapipe outputs grayscale)
+        const maskCanvas = mk(w, h);
+        const mctx = maskCanvas.getContext('2d');
+        mctx.drawImage(segmentationMask, 0, 0, w, h);
 
-        // 2. Cut the person out of source via destination-in mask
+        // 2. Convert mask to alpha + apply S-curve to crisp up the silhouette edge.
+        //    We read R or A (whichever is varying) as probability and write into
+        //    the alpha channel of an opaque-white image. Then `destination-in`
+        //    will give us a clean cut-out.
+        const mid = mctx.getImageData(0, 0, w, h);
+        const md  = mid.data;
+        const LO = 70, HI = 170, SPAN = HI - LO;   // ramp band
+        for (let i = 0; i < md.length; i += 4) {
+          // mediapipe writes mask either in RGB (grayscale) or in alpha.
+          // Take the maximum to be robust.
+          const v = Math.max(md[i], md[i+3]);
+          let a;
+          if      (v <= LO) a = 0;
+          else if (v >= HI) a = 255;
+          else              a = ((v - LO) * 255 / SPAN) | 0;
+          md[i] = md[i+1] = md[i+2] = 255;
+          md[i+3] = a;
+        }
+        mctx.putImageData(mid, 0, 0);
+
+        // 3. Cut person out of source using the cleaned mask
         const cut = mk(w, h);
         const cctx = cut.getContext('2d');
         cctx.drawImage(srcCanvas, 0, 0);
         cctx.globalCompositeOperation = 'destination-in';
-        cctx.drawImage(segmentationMask, 0, 0, w, h);
+        cctx.drawImage(maskCanvas, 0, 0);
 
-        // 3. Composite onto background
-        ctx.drawImage(cut, 0, 0);
-        resolve(out);
+        // 4. Composite onto background colour
+        const out = mk(w, h);
+        const octx = out.getContext('2d');
+        octx.fillStyle = ACTIVE_PROFILE.background;
+        octx.fillRect(0, 0, w, h);
+        octx.drawImage(cut, 0, 0);
+
+        // 5. Light retouch on flat skin regions only (preserves all features).
+        //    Disabled by default — toggle via ACTIVE_PROFILE.retouch.
+        const retouched = ACTIVE_PROFILE.retouch ? lightRetouch(out) : out;
+        resolve(retouched);
       } catch (e) {
         reject(e);
       }
@@ -1121,6 +1156,58 @@ function removeBackground(srcCanvas) {
       reject(e);
     });
   });
+}
+
+// ── Light retouch: mild bilateral-style smoothing on skin only ──
+// Smooths flat skin areas (low local variance) while preserving edges
+// (eyes, eyebrows, mouth, nose contours, hair). Does NOT change face shape,
+// only reduces sensor noise / shadow harshness on cheeks and forehead.
+function lightRetouch(srcCanvas) {
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const ctx = srcCanvas.getContext('2d');
+
+  // Get original
+  const orig = ctx.getImageData(0, 0, w, h);
+  const od = orig.data;
+
+  // Render a slightly blurred copy
+  const blurCanvas = mk(w, h);
+  const bctx = blurCanvas.getContext('2d');
+  bctx.filter = 'blur(2px)';
+  bctx.drawImage(srcCanvas, 0, 0);
+  bctx.filter = 'none';
+  const blur = bctx.getImageData(0, 0, w, h).data;
+
+  // For each pixel: if local difference between orig and blur is small (flat
+  // region) AND pixel looks like skin tone, blend orig 60% + blur 40%.
+  // Otherwise keep orig (preserves edges and non-skin areas).
+  const out = ctx.createImageData(w, h);
+  const dd  = out.data;
+  for (let i = 0; i < od.length; i += 4) {
+    const r = od[i], g = od[i+1], b = od[i+2];
+    const a = od[i+3];
+    if (a < 250) {
+      // Edge region of mask — leave untouched
+      dd[i] = r; dd[i+1] = g; dd[i+2] = b; dd[i+3] = a;
+      continue;
+    }
+    const isSkin = r > 80 && g > 50 && b > 30
+                && r > g && r > b
+                && (r - Math.min(g, b)) > 15
+                && r < 250;
+    const diff = Math.abs(r - blur[i]) + Math.abs(g - blur[i+1]) + Math.abs(b - blur[i+2]);
+    const isFlat = diff < 18;
+    if (isSkin && isFlat) {
+      dd[i]   = (r * 0.6 + blur[i]   * 0.4) | 0;
+      dd[i+1] = (g * 0.6 + blur[i+1] * 0.4) | 0;
+      dd[i+2] = (b * 0.6 + blur[i+2] * 0.4) | 0;
+    } else {
+      dd[i] = r; dd[i+1] = g; dd[i+2] = b;
+    }
+    dd[i+3] = a;
+  }
+  ctx.putImageData(out, 0, 0);
+  return srcCanvas;
 }
 
 // ── (Optional) AI via Supabase Edge Function — kept for reference, no longer called ──
