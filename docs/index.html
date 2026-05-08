@@ -560,7 +560,8 @@ const PROFILES = {
     minEar: 0.18,
     maxHeadTiltDeg: 15,
     minFaceSimilarity: 0.85,
-    retouch: true,                    // mild skin smoothing on flat areas only
+    retouch: true,                    // mild skin smoothing on flat areas (used in local mode only)
+    useAi: true,                      // true = Gemini AI processing, false = local mediapipe segmentation
   },
 };
 const ACTIVE_PROFILE = PROFILES.PL_RESIDENCE;
@@ -930,23 +931,40 @@ async function processSnap(snap) {
     const cropped = makeCrop(snap, singleDet);
     await wait(150);
 
-    // 4) Classical background replacement (no AI on the face)
+    // 4) Background replacement — AI (Gemini via Edge Function) or local segmentation
     step(3);
     let aiImg, processingOk = true;
     serverChecks = []; shortPhotoKey = null;
-    try {
-      const processedCanvas = await withTimeout(removeBackground(cropped), 15000, 'background removal');
-      aiImg = await c2i(processedCanvas);
-      // Audit upload (fire-and-forget) — stores both originals for /admin_stats.
-      // We don't block on this: even if it fails, the user gets the result.
-      auditUpload(cropped, processedCanvas).catch(e => console.warn('audit upload failed:', e));
-      serverChecks = [mkCheck('BackgroundRemoved', true, { isMandatory: true })];
-    } catch (e) {
-      console.error('Background removal failed:', e);
-      safeAlert(t('aiFailed'));
-      aiImg = await c2i(cropped);
-      processingOk = false;
-      serverChecks = [mkCheck('BackgroundRemoved', false, { isMandatory: true })];
+    if (ACTIVE_PROFILE.useAi) {
+      // ── Gemini path ─────────────────────────────────────────
+      try {
+        const r = await withTimeout(processWithAI(cropped), 90000, 'AI processing');
+        aiImg = r.img;
+        shortPhotoKey = r.shortPhotoKey;
+        serverChecks = (r.serverChecks || []).map(c =>
+          ({ ...c, test: t('chk_' + c.label) || c.label })
+        );
+      } catch (e) {
+        console.error('AI processing failed:', e);
+        safeAlert(e.quota ? t('quotaExceeded') : t('aiFailed'));
+        aiImg = await c2i(cropped);
+        processingOk = false;
+        serverChecks = [mkCheck('AiProcessed', false, { isMandatory: true })];
+      }
+    } else {
+      // ── Classical local path (mediapipe segmentation) ──────
+      try {
+        const processedCanvas = await withTimeout(removeBackground(cropped), 15000, 'background removal');
+        aiImg = await c2i(processedCanvas);
+        auditUpload(cropped, processedCanvas).catch(e => console.warn('audit upload failed:', e));
+        serverChecks = [mkCheck('BackgroundRemoved', true, { isMandatory: true })];
+      } catch (e) {
+        console.error('Background removal failed:', e);
+        safeAlert(t('aiFailed'));
+        aiImg = await c2i(cropped);
+        processingOk = false;
+        serverChecks = [mkCheck('BackgroundRemoved', false, { isMandatory: true })];
+      }
     }
     await wait(150);
 
