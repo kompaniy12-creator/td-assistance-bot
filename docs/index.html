@@ -183,6 +183,20 @@ body {
   border-radius:10px; padding:10px 12px; font-size:12px; line-height:1.4;
   color:#ffd6a8;
 }
+.err-banner {
+  background:rgba(235,87,87,.18); border:1px solid rgba(235,87,87,.55);
+  border-radius:10px; padding:12px; line-height:1.4;
+  color:#ffb3b3;
+  display:flex; flex-direction:column; gap:8px;
+}
+.err-banner .err-title { font-weight:700; font-size:13px; color:#ffe5e5; }
+.err-banner .err-msg   { font-size:12px; }
+.err-banner .err-btn {
+  background:rgba(235,87,87,.85); color:#fff;
+  border:none; border-radius:8px; padding:9px 14px;
+  font-size:13px; font-weight:600; cursor:pointer;
+}
+.err-banner .err-btn:active { opacity:.7; }
 </style>
 </head>
 <body>
@@ -253,6 +267,12 @@ body {
     </div>
 
     <div id="warnBanner" class="warn-banner hidden"></div>
+
+    <div id="errBanner" class="err-banner hidden">
+      <div class="err-title" id="errBannerTitle"></div>
+      <div class="err-msg"   id="errBannerMsg"></div>
+      <button class="err-btn" id="errRetryBtn" data-i18n="retryAi">↻ Повторить</button>
+    </div>
 
     <div class="checks-card">
       <div class="card-lbl" data-i18n="checksLbl">Requirements</div>
@@ -330,6 +350,9 @@ const I18N = {
     aiFailed: 'AI не сработал — показываю кадрированное фото без обработки',
     procError: 'Ошибка обработки. Попробуйте ещё раз',
     saveHint: 'Зажмите фото и выберите «Сохранить в Фото»',
+    retryAi: '↻ Повторить AI',
+    aiFailedTitle: 'AI не сработал',
+    aiFailedMsg: 'Фон не заменён. Это бывает если в кадре виден второй человек или связь зависла. Нажмите «Повторить AI» или переснимите фото.',
     linesBtn: '📐 Линии обреза',
     linesOn: '📐 Скрыть линии',
     pkPrefix: 'ID',
@@ -399,6 +422,9 @@ const I18N = {
     aiFailed: 'AI не спрацював — показую кадроване фото без обробки',
     procError: 'Помилка обробки. Спробуйте ще раз',
     saveHint: 'Затисніть фото і виберіть «Зберегти у Фото»',
+    retryAi: '↻ Повторити AI',
+    aiFailedTitle: 'AI не спрацював',
+    aiFailedMsg: 'Фон не замінено. Таке буває, якщо у кадрі видно другу людину або зв\'язок завис. Натисніть «Повторити AI» або перезніміть.',
     linesBtn: '📐 Лінії обрізу',
     linesOn: '📐 Сховати лінії',
     pkPrefix: 'ID',
@@ -468,6 +494,9 @@ const I18N = {
     aiFailed: 'AI nie zadziałał — pokazuję wykadrowane zdjęcie bez obróbki',
     procError: 'Błąd przetwarzania. Spróbuj ponownie',
     saveHint: 'Przytrzymaj zdjęcie i wybierz „Zapisz w Zdjęciach”',
+    retryAi: '↻ Powtórz AI',
+    aiFailedTitle: 'AI nie zadziałał',
+    aiFailedMsg: 'Tło nie zostało zastąpione. Zdarza się, gdy w kadrze jest druga osoba lub połączenie się zawiesiło. Naciśnij „Powtórz AI" lub zrób ponowne zdjęcie.',
     linesBtn: '📐 Linie kadrowania',
     linesOn: '📐 Ukryj linie',
     pkPrefix: 'ID',
@@ -537,6 +566,9 @@ const I18N = {
     aiFailed: 'AI failed — showing cropped photo without processing',
     procError: 'Processing error. Please try again',
     saveHint: 'Long-press the photo and tap "Save Image"',
+    retryAi: '↻ Retry AI',
+    aiFailedTitle: 'AI processing failed',
+    aiFailedMsg: 'Background was not replaced. This happens when a second person is visible in the frame or the network call timed out. Tap "Retry AI" or retake the photo.',
     linesBtn: '📐 Crop guide lines',
     linesOn: '📐 Hide lines',
     pkPrefix: 'ID',
@@ -631,6 +663,8 @@ let preChecks = [];                   // pre-AI taxonomy items
 let serverChecks = [];                // taxonomy items returned by Edge Function
 let shortPhotoKey = null;             // 10-hex token for support
 let showGuideLines = false;
+let lastCroppedSnap = null;           // saved cropped canvas for retry-AI
+let aiSucceeded = false;
 let flashOnCapture = (() => {         // user preference for screen-flash at capture
   try { return localStorage.getItem('flashOnCapture') === '1'; } catch { return false; }
 })();
@@ -1029,13 +1063,17 @@ async function processSnap(snap) {
         serverChecks = (r.serverChecks || []).map(c =>
           ({ ...c, test: t('chk_' + c.label) || c.label })
         );
+        aiSucceeded = true;
       } catch (e) {
         console.error('AI processing failed:', e);
-        safeAlert(e.quota ? t('quotaExceeded') : t('aiFailed'));
+        // Don't show alert — we'll display a prominent banner instead.
+        if (e.quota) safeAlert(t('quotaExceeded'));
         aiImg = await c2i(cropped);
         processingOk = false;
         serverChecks = [mkCheck('AiProcessed', false, { isMandatory: true })];
+        aiSucceeded = false;
       }
+      lastCroppedSnap = cropped;
     } else {
       // ── Classical local path (mediapipe segmentation) ──────
       try {
@@ -1490,6 +1528,17 @@ async function render() {
   const { blob, mb } = await compressToTarget(canvas);
   lastResultBlob = blob; lastResultMb = mb;
 
+  // AI failure banner — most prominent, shown if Gemini didn't process the photo
+  const errBanner = $('errBanner');
+  if (ACTIVE_PROFILE.useAi && aiSucceeded === false) {
+    $('errBannerTitle').textContent = t('aiFailedTitle');
+    $('errBannerMsg').textContent   = t('aiFailedMsg');
+    $('errRetryBtn').textContent    = t('retryAi');
+    errBanner.classList.remove('hidden');
+  } else {
+    errBanner.classList.add('hidden');
+  }
+
   // Similarity warning banner
   const banner = $('warnBanner');
   if (similarityScore !== null && similarityScore < ACTIVE_PROFILE.minFaceSimilarity) {
@@ -1577,9 +1626,33 @@ async function generateA4Pdf() {
 }
 
 // ── Controls ─────────────────────────────────────────────────
+// Retry AI on the already-cropped snap (no need to retake).
+async function retryAi() {
+  if (!lastCroppedSnap) return;
+  $('errBanner').classList.add('hidden');
+  showScreen('screenProcessing');
+  const ids = ['ps1','ps2','ps3','ps4','ps5'];
+  ids.forEach((id,i) => $(id).className = 'pstep' + (i < 3 ? ' done' : i === 3 ? ' active' : ''));
+  try {
+    const r = await withTimeout(processWithAI(lastCroppedSnap), 90000, 'AI processing');
+    capturedImg = r.img;
+    shortPhotoKey = r.shortPhotoKey;
+    serverChecks = (r.serverChecks || []).map(c => ({ ...c, test: t('chk_' + c.label) || c.label }));
+    aiSucceeded = true;
+    showScreen('screenResult');
+    await render();
+    tg.MainButton.show();
+  } catch (e) {
+    console.error('retry failed:', e);
+    safeAlert(e.quota ? t('quotaExceeded') : (t('aiFailedTitle') + ': ' + (e.message || '')));
+    showScreen('screenResult');
+  }
+}
+
 $('captureBtn').addEventListener('click', capture);
 $('retakeBtn').addEventListener('click', resetToCamera);
 $('pdfBtn').addEventListener('click', generateA4Pdf);
+$('errRetryBtn').addEventListener('click', retryAi);
 
 // Flash toggle — persisted in localStorage
 function syncFlashBtn() {
@@ -1667,9 +1740,11 @@ function resetToCamera() {
   similarityScore = null;
   lastResultBlob = null; lastResultMb = 0;
   preChecks = []; serverChecks = []; shortPhotoKey = null;
+  lastCroppedSnap = null; aiSucceeded = false;
   showGuideLines = false;
   goodFrames = 0;
   $('warnBanner').classList.add('hidden');
+  $('errBanner').classList.add('hidden');
   $('pkLine').textContent = '';
   $('linesBtn').textContent = t('linesBtn');
   $('ringCircle').style.strokeDashoffset = RING_C;
