@@ -1622,7 +1622,32 @@ async function generateA4Pdf() {
     }
   }
 
-  pdf.save('biometric_a4_print.pdf');
+  // jsPDF.save() opens the system viewer in iOS Telegram WebView with no
+  // download / back button. Use the same Web Share fallback chain as JPG.
+  const blob = pdf.output('blob');
+  const file = new File([blob], 'biometric_a4_print.pdf', { type: 'application/pdf' });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: 'A4 print sheet' });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      console.warn('PDF share failed:', e);
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  try {
+    window.open(url, '_blank');
+    safeAlert(t('saveHint'));
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    return;
+  } catch (e) { /* fall through */ }
+  const a = Object.assign(document.createElement('a'),
+    { href: url, download: 'biometric_a4_print.pdf' });
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 // ── Controls ─────────────────────────────────────────────────
